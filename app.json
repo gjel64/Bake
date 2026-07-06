@@ -4,7 +4,12 @@
     "slug": "bake",
     "version": "1.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0A100D",
+    "splash": {
+      "backgroundColor": "#0A100D",
+      "resizeMode": "contain"
+    },
     "assetBundlePatterns": [
       "**/*"
     ],
