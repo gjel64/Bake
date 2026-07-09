@@ -2,7 +2,7 @@
   "expo": {
     "name": "Bake",
     "slug": "bake",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0A100D",
@@ -13,11 +13,20 @@
     "assetBundlePatterns": [
       "**/*"
     ],
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#54D6A6"
+        }
+      ]
+    ],
     "ios": {
       "supportsTablet": true
     },
     "android": {
-      "package": "com.bake.app"
+      "package": "com.bake.app",
+      "allowBackup": true
     },
     "web": {},
     "extra": {

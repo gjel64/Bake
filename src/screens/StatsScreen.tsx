@@ -7,13 +7,14 @@
  */
 
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 import { GradientHeader } from '@/components/GradientHeader';
+import { SettingsModal } from '@/components/SettingsModal';
 import { ScreenBackground } from '@/components/ui/ScreenBackground';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { ProgressRing } from '@/components/ui/ProgressRing';
@@ -139,17 +140,31 @@ function computeStats(): Stats {
 
 export function StatsScreen() {
   const [s, setS] = useState<Stats | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      setS(computeStats());
-    }, []),
-  );
+  const reload = useCallback(() => setS(computeStats()), []);
+  useFocusEffect(reload);
 
   return (
     <ScreenBackground>
       <SafeAreaView style={styles.container} edges={['bottom']}>
-        <GradientHeader title="Statistiques" subtitle="Ta constance, en un regard" />
+        <GradientHeader
+          title="Statistiques"
+          subtitle="Ta constance, en un regard"
+          right={
+            <Pressable onPress={() => setSettingsOpen(true)} hitSlop={10} style={styles.gear}>
+              <Ionicons name="settings-outline" size={22} color={colors.text} />
+            </Pressable>
+          }
+        />
+
+        <SettingsModal
+          visible={settingsOpen}
+          onClose={() => {
+            setSettingsOpen(false);
+            reload();
+          }}
+        />
 
         {s && (
           <ScrollView contentContainerStyle={styles.scroll}>
@@ -258,6 +273,11 @@ function Meta({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  gear: {
+    width: 40, height: 40, borderRadius: 999,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.glassBorder,
+    alignItems: 'center', justifyContent: 'center',
+  },
   scroll: { padding: spacing.lg, gap: spacing.md, paddingBottom: spacing.xl * 2 },
 
   // Hero

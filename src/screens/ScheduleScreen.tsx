@@ -10,14 +10,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import {
-  Alert,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,11 +21,10 @@ import { SegmentedControl } from '@/components/SegmentedControl';
 import { AddEventModal } from '@/components/AddEventModal';
 import {
   EventItem,
-  addEvent,
-  deleteEvent,
   getEventCountsInRange,
   getEventsForDay,
   getMeditationSecondsForDay,
+  toggleTodoDone,
 } from '@/db/database';
 import {
   addDays,
@@ -54,6 +46,7 @@ export function ScheduleScreen() {
   const [view, setView] = useState<ViewMode>('Jour');
   const [selectedDay, setSelectedDay] = useState<string>(todayKey());
   const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<EventItem | null>(null);
   // Compteur qui, lorsqu'il change, force le rechargement des données.
   const [version, setVersion] = useState(0);
   const reload = () => setVersion((v) => v + 1);
@@ -77,24 +70,22 @@ export function ScheduleScreen() {
     }
   }
 
-  /** Suppression avec confirmation. */
-  function askDelete(ev: EventItem) {
-    Alert.alert('Supprimer', `Supprimer « ${ev.title} » ?`, [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Supprimer',
-        style: 'destructive',
-        onPress: () => {
-          deleteEvent(ev.id);
-          reload();
-        },
-      },
-    ]);
+  /** Ouvre l'édition d'un événement (le tap sur une carte). */
+  function openEdit(ev: EventItem) {
+    setEditing(ev);
+    setModalOpen(true);
   }
 
-  function onAdd(title: string, day: string, start: string, end: string) {
-    addEvent(title, day, start, end);
+  /** Coche/décoche un événement lié à un to-do (synchronise les deux). */
+  function toggleLinked(ev: EventItem) {
+    if (ev.todo_id == null) return;
+    toggleTodoDone(ev.todo_id);
     reload();
+  }
+
+  function openAdd() {
+    setEditing(null);
+    setModalOpen(true);
   }
 
   // Libellé de la période affichée dans la barre de navigation.
@@ -124,13 +115,13 @@ export function ScheduleScreen() {
 
       {/* La vue active */}
       {view === 'Jour' && (
-        <DayView day={selectedDay} version={version} onDelete={askDelete} />
+        <DayView day={selectedDay} version={version} onOpen={openEdit} onToggle={toggleLinked} />
       )}
       {view === 'Semaine' && (
         <WeekView
           day={selectedDay}
           version={version}
-          onDelete={askDelete}
+          onOpen={openEdit}
           onPickDay={(d) => {
             setSelectedDay(d);
             setView('Jour');
@@ -150,17 +141,18 @@ export function ScheduleScreen() {
       )}
 
       <Pressable
-        onPress={() => setModalOpen(true)}
+        onPress={openAdd}
         style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85 }]}
       >
-        <Ionicons name="add" size={30} color={colors.white} />
+        <Ionicons name="add" size={30} color={colors.textOnAurora} />
       </Pressable>
 
       <AddEventModal
         visible={modalOpen}
         defaultDay={selectedDay}
+        event={editing}
         onClose={() => setModalOpen(false)}
-        onAdd={onAdd}
+        onSaved={reload}
       />
       </SafeAreaView>
     </ScreenBackground>
@@ -174,11 +166,13 @@ export function ScheduleScreen() {
 function DayView({
   day,
   version,
-  onDelete,
+  onOpen,
+  onToggle,
 }: {
   day: string;
   version: number;
-  onDelete: (ev: EventItem) => void;
+  onOpen: (ev: EventItem) => void;
+  onToggle: (ev: EventItem) => void;
 }) {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [meditationSec, setMeditationSec] = useState(0);
@@ -196,7 +190,7 @@ function DayView({
     <ScrollView contentContainerStyle={styles.dayList}>
       {meditationSec > 0 && <MeditationBadge seconds={meditationSec} />}
       {events.map((ev) => (
-        <EventRow key={ev.id} event={ev} onDelete={onDelete} />
+        <EventRow key={ev.id} event={ev} onOpen={onOpen} onToggle={onToggle} />
       ))}
     </ScrollView>
   );
@@ -214,26 +208,46 @@ function MeditationBadge({ seconds }: { seconds: number }) {
   );
 }
 
-/** Une ligne d'événement : plage horaire + titre + corbeille. */
+/** Une ligne d'événement : horaires + titre. Tap = éditer. Case = to-do lié. */
 function EventRow({
   event,
-  onDelete,
+  onOpen,
+  onToggle,
 }: {
   event: EventItem;
-  onDelete: (ev: EventItem) => void;
+  onOpen: (ev: EventItem) => void;
+  onToggle: (ev: EventItem) => void;
 }) {
+  const accent = event.color ?? colors.primary;
+  const linked = event.todo_id != null;
+  const done = event.done === 1;
   return (
-    <View style={[styles.eventRow]}>
+    <Pressable onPress={() => onOpen(event)} style={styles.eventRow}>
       <View style={styles.timeCol}>
         <Text style={styles.timeStart}>{event.start}</Text>
         <Text style={styles.timeEnd}>{event.end}</Text>
       </View>
-      <View style={styles.eventAccent} />
-      <Text style={styles.eventTitle}>{event.title}</Text>
-      <Pressable onPress={() => onDelete(event)} hitSlop={10} style={styles.trash}>
-        <Ionicons name="trash-outline" size={20} color={colors.danger} />
-      </Pressable>
-    </View>
+      <View style={[styles.eventAccent, { backgroundColor: accent }]} />
+
+      {/* Case à cocher seulement pour un événement lié à un to-do */}
+      {linked && (
+        <Pressable
+          onPress={() => onToggle(event)}
+          hitSlop={8}
+          style={[styles.eventCheck, { borderColor: accent }, done && { backgroundColor: accent }]}
+        >
+          {done && <Ionicons name="checkmark" size={14} color={colors.textOnAurora} />}
+        </Pressable>
+      )}
+
+      <Text
+        style={[styles.eventTitle, done && { color: colors.textMuted, textDecorationLine: 'line-through' }]}
+        numberOfLines={1}
+      >
+        {event.title}
+      </Text>
+      <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+    </Pressable>
   );
 }
 
@@ -244,12 +258,12 @@ function EventRow({
 function WeekView({
   day,
   version,
-  onDelete,
+  onOpen,
   onPickDay,
 }: {
   day: string;
   version: number;
-  onDelete: (ev: EventItem) => void;
+  onOpen: (ev: EventItem) => void;
   onPickDay: (day: string) => void;
 }) {
   const days = weekDays(day); // 7 clés (lundi → dimanche)
@@ -264,7 +278,7 @@ function WeekView({
           version={version}
           isToday={d === today}
           onTitlePress={() => onPickDay(d)}
-          onDelete={onDelete}
+          onOpen={onOpen}
         />
       ))}
     </ScrollView>
@@ -276,13 +290,13 @@ function WeekDayBlock({
   version,
   isToday,
   onTitlePress,
-  onDelete,
+  onOpen,
 }: {
   day: string;
   version: number;
   isToday: boolean;
   onTitlePress: () => void;
-  onDelete: (ev: EventItem) => void;
+  onOpen: (ev: EventItem) => void;
 }) {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [meditationSec, setMeditationSec] = useState(0);
@@ -307,15 +321,20 @@ function WeekDayBlock({
         <Text style={styles.weekEmpty}>—</Text>
       ) : (
         events.map((ev) => (
-          <View key={ev.id} style={styles.weekEventRow}>
+          <Pressable key={ev.id} onPress={() => onOpen(ev)} style={styles.weekEventRow}>
+            <View style={[styles.weekDot, { backgroundColor: ev.color ?? colors.primary }]} />
             <Text style={styles.weekEventTime}>{ev.start}</Text>
-            <Text style={styles.weekEventTitle} numberOfLines={1}>
+            <Text
+              style={[
+                styles.weekEventTitle,
+                ev.done === 1 && { color: colors.textMuted, textDecorationLine: 'line-through' },
+              ]}
+              numberOfLines={1}
+            >
               {ev.title}
             </Text>
-            <Pressable onPress={() => onDelete(ev)} hitSlop={8}>
-              <Ionicons name="close" size={18} color={colors.textMuted} />
-            </Pressable>
-          </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
+          </Pressable>
         ))
       )}
     </View>
@@ -476,6 +495,10 @@ const styles = StyleSheet.create({
   },
   eventTitle: { flex: 1, fontSize: font.body, color: colors.text },
   trash: { padding: spacing.xs },
+  eventCheck: {
+    width: 22, height: 22, borderRadius: 11, borderWidth: 2,
+    alignItems: 'center', justifyContent: 'center', marginRight: spacing.sm,
+  },
 
   // Bandeau « médité » (vue jour)
   medBadge: {
@@ -537,6 +560,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingVertical: spacing.xs + 1,
   },
+  weekDot: { width: 8, height: 8, borderRadius: 4 },
   weekEventTime: {
     width: 44,
     fontSize: font.small,

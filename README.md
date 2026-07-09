@@ -16,6 +16,7 @@ npm install          # dépendances
 npm run android      # émulateur Android Studio démarré au préalable
 # ou : npm start     # puis scan du QR code avec Expo Go
 npm run tsc          # vérification de types (sans build)
+eas build -p android --profile preview # installer sur le tel
 ```
 
 ## Structure

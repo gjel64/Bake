@@ -1,14 +1,13 @@
 /**
- * ScreenBackground — le fond commun : une forêt brumeuse.
+ * ScreenBackground — le voile + l'onde tactile de chaque écran.
  *
- * Trois couches :
- *   1. l'image de forêt (assets/forest.png), déjà douce/floutée,
- *   2. un voile sombre dégradé (scrim) pour que le texte reste lisible,
- *   3. le contenu de l'écran.
- *
- * Bonus : au toucher, une onde douce se propage depuis le point touché
- * (comme une goutte sur l'eau). L'événement `onTouchStart` est capté au niveau
- * de la racine : il se déclenche partout, sans bloquer les boutons.
+ * L'IMAGE de fond (le panorama d'Alaska) est désormais une couche GLOBALE
+ * derrière la navigation (voir PanoramaBackground + App.tsx) : elle glisse en
+ * parallaxe quand on change d'onglet. Ici on ne pose plus que :
+ *   1. un voile sombre dégradé (scrim) pour la lisibilité,
+ *   2. l'onde douce au toucher,
+ *   3. le contenu.
+ * Le fond est transparent pour laisser voir le panorama en dessous.
  */
 
 import { ReactNode, useEffect, useRef, useState } from 'react';
@@ -16,13 +15,10 @@ import {
   Animated,
   Easing,
   GestureResponderEvent,
-  ImageBackground,
   StyleSheet,
   View,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-
-const FOREST = require('../../../assets/forest.png');
 
 type Ripple = { id: number; x: number; y: number };
 
@@ -37,23 +33,21 @@ export function ScreenBackground({ children, dim = false }: Props) {
   const nextId = useRef(0);
 
   function onTouch(e: GestureResponderEvent) {
-    const { pageX, pageY } = e.nativeEvent; // position à l'écran
+    const { pageX, pageY } = e.nativeEvent;
     const id = nextId.current++;
-    // On garde au plus quelques ondes en vie simultanément.
     setRipples((rs) => [...rs.slice(-4), { id, x: pageX, y: pageY }]);
   }
 
   return (
     <View style={styles.root} onTouchStart={onTouch}>
-      <ImageBackground source={FOREST} resizeMode="cover" style={StyleSheet.absoluteFill}>
-        {/* Voile dégradé : plus dense en haut (en-tête) et en bas (barre) */}
-        <LinearGradient
-          colors={['rgba(9,16,13,0.60)', 'rgba(9,16,13,0.18)', 'rgba(9,16,13,0.72)']}
-          locations={[0.9, 0.1, 1]}
-          style={StyleSheet.absoluteFill}
-        />
-        {dim && <View style={[StyleSheet.absoluteFill, styles.dim]} />}
-      </ImageBackground>
+      {/* Voile dégradé : dense en haut (en-tête) et en bas (barre d'onglets) */}
+      <LinearGradient
+        colors={['rgba(9,16,13,0.55)', 'rgba(9,16,13,0.14)', 'rgba(9,16,13,0.72)']}
+        locations={[0, 0.42, 1]}
+        style={StyleSheet.absoluteFill}
+        pointerEvents="none"
+      />
+      {dim && <View style={[StyleSheet.absoluteFill, styles.dim]} pointerEvents="none" />}
 
       {/* Contenu */}
       <View style={styles.content}>{children}</View>
@@ -75,10 +69,8 @@ export function ScreenBackground({ children, dim = false }: Props) {
 
 const RIPPLE = 150;
 
-/** Une onde : un anneau clair qui grandit et s'efface. */
 function TouchRipple({ x, y, onDone }: { x: number; y: number; onDone: () => void }) {
   const anim = useRef(new Animated.Value(0)).current;
-
   useEffect(() => {
     Animated.timing(anim, {
       toValue: 1,
@@ -102,7 +94,7 @@ function TouchRipple({ x, y, onDone }: { x: number; y: number; onDone: () => voi
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#0A100D' },
+  root: { flex: 1, backgroundColor: 'transparent' },
   content: { flex: 1 },
   dim: { backgroundColor: 'rgba(8,14,12,0.42)' },
   ripple: {
@@ -111,6 +103,6 @@ const styles = StyleSheet.create({
     height: RIPPLE,
     borderRadius: RIPPLE / 2,
     borderWidth: 2,
-    borderColor: 'rgba(226,236,228,0.75)',
+    borderColor: 'rgba(226,236,228,0.7)',
   },
 });

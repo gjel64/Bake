@@ -25,6 +25,7 @@ import * as Haptics from 'expo-haptics';
 
 import { GradientHeader } from '@/components/GradientHeader';
 import { ScreenBackground } from '@/components/ui/ScreenBackground';
+import { LeafBurst } from '@/components/ui/LeafBurst';
 import { HabitCard } from '@/components/HabitCard';
 import { AddHabitModal } from '@/components/AddHabitModal';
 import {
@@ -49,6 +50,7 @@ export function HabitsScreen() {
   const [doneToday, setDoneToday] = useState(0);
   const [cooldown, setCooldown] = useState(0); // jours restants avant nouvel ajout
   const [modalOpen, setModalOpen] = useState(false);
+  const [burst, setBurst] = useState(0); // déclencheur de l'envolée de feuilles
 
   /** Recharge tout l'état depuis la base. */
   const refresh = useCallback(() => {
@@ -71,6 +73,7 @@ export function HabitsScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     completeHabit(habit.id);
+    setBurst((b) => b + 1); // envolée de feuilles
     refresh();
   }
 
@@ -122,6 +125,9 @@ export function HabitsScreen() {
           onClose={() => setModalOpen(false)}
           onAdd={onAdd}
         />
+
+        {/* Envolée de feuilles à la validation (par-dessus la liste) */}
+        <LeafBurst trigger={burst} originY={320} />
       </SafeAreaView>
     </ScreenBackground>
   );

@@ -1,19 +1,20 @@
 /**
- * AddEventModal — création d'un événement d'agenda (titre + date + horaires).
+ * AddEventModal — créer / modifier un événement d'agenda.
  *
- * On utilise le sélecteur natif Android (@react-native-community/datetimepicker)
- * pour la date et les heures : c'est l'UX standard, fiable et « moderne ».
- * Sur Android il s'affiche comme une boîte de dialogue système qu'on ouvre à la
- * demande (mode 'date' ou 'time').
+ * Nouveautés V2 :
+ *  - une catégorie (couleur partagée avec les to-dos),
+ *  - « Depuis un to-do » : remplir l'événement à partir d'une tâche (il reste
+ *    lié — cocher l'un cochera l'autre),
+ *  - mode édition (pré-rempli) avec suppression.
  *
- * Le composant renvoie des chaînes normalisées ("YYYY-MM-DD", "HH:MM") au
- * parent via `onAdd`. Il ne touche pas la base.
+ * Écrit directement en base puis prévient via `onSaved`.
  */
 
 import { useEffect, useState } from 'react';
 import {
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -21,134 +22,219 @@ import {
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
+
+import { CategoryPicker } from '@/components/CategoryPicker';
+import {
+  EventItem,
+  Todo,
+  addEvent,
+  deleteEvent,
+  getTodos,
+  updateEvent,
+} from '@/db/database';
 import { fromDayKey, labelDayLong, toDayKey, toTimeKey } from '@/lib/dates';
 import { colors, font, radius, spacing } from '@/theme';
 
 type Props = {
   visible: boolean;
-  defaultDay: string; // jour présélectionné (celui qu'on regarde)
+  defaultDay: string;
+  event?: EventItem | null; // édition
+  presetTitle?: string; // pré-remplissage (depuis un to-do)
+  presetTodoId?: number | null;
+  presetCategoryId?: number | null;
   onClose: () => void;
-  onAdd: (title: string, day: string, start: string, end: string) => void;
+  onSaved: () => void;
 };
 
-// Quel sélecteur natif est ouvert (aucun le reste du temps).
 type PickerKind = 'date' | 'start' | 'end' | null;
 
-/** Un objet Date « aujourd'hui » à l'heure h:00 (pour des valeurs par défaut). */
 function atHour(day: string, hour: number): Date {
   const d = fromDayKey(day);
   d.setHours(hour, 0, 0, 0);
   return d;
 }
 
-export function AddEventModal({ visible, defaultDay, onClose, onAdd }: Props) {
+export function AddEventModal({
+  visible,
+  defaultDay,
+  event,
+  presetTitle,
+  presetTodoId,
+  presetCategoryId,
+  onClose,
+  onSaved,
+}: Props) {
   const [title, setTitle] = useState('');
+  const [categoryId, setCategoryId] = useState<number | null>(null);
+  const [linkTodoId, setLinkTodoId] = useState<number | null>(null);
   const [day, setDay] = useState<Date>(fromDayKey(defaultDay));
   const [start, setStart] = useState<Date>(atHour(defaultDay, 9));
   const [end, setEnd] = useState<Date>(atHour(defaultDay, 10));
   const [picker, setPicker] = useState<PickerKind>(null);
+  const [todos, setTodos] = useState<Todo[]>([]);
 
-  // Quand on ouvre la modale sur un autre jour, on resynchronise les valeurs.
   useEffect(() => {
-    if (visible) {
-      setTitle('');
+    if (!visible) return;
+    if (event) {
+      // Édition d'un événement existant.
+      setTitle(event.title);
+      setCategoryId(event.category_id);
+      setLinkTodoId(event.todo_id);
+      setDay(fromDayKey(event.day));
+      setStart(atHour(event.day, 9));
+      setEnd(atHour(event.day, 10));
+      const [sh, sm] = event.start.split(':').map(Number);
+      const [eh, em] = event.end.split(':').map(Number);
+      setStart((s) => { const d = new Date(s); d.setHours(sh, sm); return d; });
+      setEnd((e) => { const d = new Date(e); d.setHours(eh, em); return d; });
+    } else {
+      setTitle(presetTitle ?? '');
+      setCategoryId(presetCategoryId ?? null);
+      setLinkTodoId(presetTodoId ?? null);
       setDay(fromDayKey(defaultDay));
       setStart(atHour(defaultDay, 9));
       setEnd(atHour(defaultDay, 10));
-      setPicker(null);
+      // liste des to-dos non planifiés, pour le remplissage rapide
+      setTodos(getTodos().filter((t) => t.done === 0 && t.scheduled === 0));
     }
-  }, [visible, defaultDay]);
+    setPicker(null);
+  }, [visible, event, defaultDay, presetTitle, presetTodoId, presetCategoryId]);
 
-  /** Callback commun du sélecteur natif. */
   function onPick(selected: Date | undefined) {
     const kind = picker;
-    setPicker(null); // sur Android le dialog se ferme après le choix
-    if (!selected) return; // annulation
+    setPicker(null);
+    if (!selected) return;
     if (kind === 'date') setDay(selected);
     if (kind === 'start') setStart(selected);
     if (kind === 'end') setEnd(selected);
   }
 
+  function fillFromTodo(t: Todo) {
+    setTitle(t.title);
+    setCategoryId(t.category_id);
+    setLinkTodoId(t.id);
+  }
+
   function submit() {
     const t = title.trim();
     if (t.length === 0) return;
-    onAdd(t, toDayKey(day), toTimeKey(start), toTimeKey(end));
+    if (event) {
+      updateEvent(event.id, t, toDayKey(day), toTimeKey(start), toTimeKey(end), categoryId);
+    } else {
+      addEvent(t, toDayKey(day), toTimeKey(start), toTimeKey(end), categoryId, linkTodoId);
+    }
+    onSaved();
     onClose();
   }
+
+  function remove() {
+    if (!event) return;
+    deleteEvent(event.id);
+    onSaved();
+    onClose();
+  }
+
+  const showTodoFill = !event && todos.length > 0;
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} />
-
       <View style={styles.sheetWrap}>
         <View style={styles.sheet}>
           <View style={styles.handle} />
-          <Text style={styles.title}>Nouvel événement</Text>
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <Text style={styles.title}>
+              {event ? 'Modifier l’événement' : 'Nouvel événement'}
+            </Text>
 
-          <TextInput
-            value={title}
-            onChangeText={setTitle}
-            placeholder="Travail, sport, méditation…"
-            placeholderTextColor={colors.textMuted}
-            style={styles.input}
-            autoFocus
-          />
+            {showTodoFill && (
+              <>
+                <Text style={styles.label}>Depuis un to-do</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.todoRow}>
+                  {todos.map((t) => (
+                    <Pressable
+                      key={t.id}
+                      onPress={() => fillFromTodo(t)}
+                      style={[styles.todoChip, linkTodoId === t.id && styles.todoChipActive]}
+                    >
+                      <Ionicons
+                        name="checkbox-outline"
+                        size={15}
+                        color={t.cat_color ?? colors.textMuted}
+                      />
+                      <Text style={styles.todoChipText} numberOfLines={1}>{t.title}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </>
+            )}
 
-          {/* Ligne Date */}
-          <PickerRow
-            icon="calendar-outline"
-            label="Date"
-            value={labelDayLong(toDayKey(day))}
-            onPress={() => setPicker('date')}
-          />
+            <TextInput
+              value={title}
+              onChangeText={setTitle}
+              placeholder="Travail, sport, méditation…"
+              placeholderTextColor={colors.textMuted}
+              style={styles.input}
+            />
 
-          {/* Ligne heures début / fin côte à côte */}
-          <View style={styles.timesRow}>
-            <View style={styles.timeCol}>
-              <PickerRow
-                icon="time-outline"
-                label="Début"
-                value={toTimeKey(start)}
-                onPress={() => setPicker('start')}
-              />
+            <Text style={styles.label}>Catégorie</Text>
+            <CategoryPicker value={categoryId} onChange={setCategoryId} />
+
+            <PickerRow
+              icon="calendar-outline"
+              label="Date"
+              value={labelDayLong(toDayKey(day))}
+              onPress={() => setPicker('date')}
+            />
+            <View style={styles.timesRow}>
+              <View style={styles.timeCol}>
+                <PickerRow icon="time-outline" label="Début" value={toTimeKey(start)} onPress={() => setPicker('start')} />
+              </View>
+              <View style={styles.timeCol}>
+                <PickerRow icon="time-outline" label="Fin" value={toTimeKey(end)} onPress={() => setPicker('end')} />
+              </View>
             </View>
-            <View style={styles.timeCol}>
-              <PickerRow
-                icon="time-outline"
-                label="Fin"
-                value={toTimeKey(end)}
-                onPress={() => setPicker('end')}
-              />
-            </View>
-          </View>
 
-          <Pressable
-            onPress={submit}
-            disabled={title.trim().length === 0}
-            style={({ pressed }) => [
-              styles.submit,
-              (pressed || title.trim().length === 0) && { opacity: 0.6 },
-            ]}
-          >
-            <Text style={styles.submitText}>Ajouter</Text>
-          </Pressable>
+            {linkTodoId !== null && (
+              <View style={styles.linkNote}>
+                <Ionicons name="link-outline" size={14} color={colors.aurora} />
+                <Text style={styles.linkNoteText}>Lié à un to-do (coché des deux côtés)</Text>
+              </View>
+            )}
+
+            <Pressable
+              onPress={submit}
+              disabled={title.trim().length === 0}
+              style={({ pressed }) => [
+                styles.submit,
+                (pressed || title.trim().length === 0) && { opacity: 0.6 },
+              ]}
+            >
+              <Text style={styles.submitText}>{event ? 'Enregistrer' : 'Ajouter'}</Text>
+            </Pressable>
+
+            {event && (
+              <Pressable onPress={remove} style={styles.deleteBtn}>
+                <Ionicons name="trash-outline" size={18} color={colors.danger} />
+                <Text style={styles.deleteText}>Supprimer</Text>
+              </Pressable>
+            )}
+          </ScrollView>
         </View>
       </View>
 
-      {/* Sélecteur natif : monté seulement quand ouvert */}
       {picker !== null && (
         <DateTimePicker
           value={picker === 'date' ? day : picker === 'start' ? start : end}
           mode={picker === 'date' ? 'date' : 'time'}
           is24Hour
-          onChange={(_event, selected) => onPick(selected)}
+          onChange={(_e, sel) => onPick(sel)}
         />
       )}
     </Modal>
   );
 }
 
-/** Une ligne « étiquette + valeur » qui ouvre un sélecteur au tap. */
 function PickerRow({
   icon,
   label,
@@ -173,15 +259,10 @@ function PickerRow({
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0006',
-  },
-  sheetWrap: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: '#0009' },
+  sheetWrap: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
+    maxHeight: '88%',
     backgroundColor: colors.nightAlt,
     borderTopWidth: 1,
     borderColor: colors.glassBorder,
@@ -191,62 +272,47 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
   },
   handle: {
-    alignSelf: 'center',
-    width: 44,
-    height: 5,
-    borderRadius: radius.pill,
-    backgroundColor: colors.border,
-    marginBottom: spacing.md,
+    alignSelf: 'center', width: 44, height: 5, borderRadius: radius.pill,
+    backgroundColor: colors.border, marginBottom: spacing.md,
   },
-  title: {
-    fontSize: font.heading,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: spacing.md,
-  },
+  title: { fontSize: font.heading, fontWeight: '700', color: colors.text, marginBottom: spacing.md },
   input: {
+    backgroundColor: colors.surfaceAlt, borderRadius: radius.sm,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 2,
+    fontSize: font.body, color: colors.text, marginTop: spacing.sm,
+  },
+  label: { fontSize: font.small, color: colors.textMuted, marginTop: spacing.md, marginBottom: spacing.xs },
+  todoRow: { flexGrow: 0, marginBottom: spacing.xs },
+  todoChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 200,
+    borderWidth: 1.5, borderColor: colors.glassBorder, borderRadius: radius.pill,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm, marginRight: spacing.sm,
     backgroundColor: colors.surfaceAlt,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm + 2,
-    fontSize: font.body,
-    color: colors.text,
-    marginBottom: spacing.sm,
   },
-  timesRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
+  todoChipActive: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  todoChipText: { fontSize: font.small, color: colors.text },
+  timesRow: { flexDirection: 'row', gap: spacing.sm },
   timeCol: { flex: 1 },
   pickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    marginTop: spacing.sm,
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    backgroundColor: colors.surfaceAlt, borderRadius: radius.sm,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm, marginTop: spacing.sm,
   },
-  pickerLabel: {
-    fontSize: font.small,
-    color: colors.textMuted,
+  pickerLabel: { fontSize: font.small, color: colors.textMuted },
+  pickerValue: { fontSize: font.body, color: colors.text, fontWeight: '600' },
+  linkNote: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    marginTop: spacing.md,
   },
-  pickerValue: {
-    fontSize: font.body,
-    color: colors.text,
-    fontWeight: '600',
-  },
+  linkNoteText: { fontSize: font.small, color: colors.aurora },
   submit: {
-    marginTop: spacing.lg,
-    backgroundColor: colors.primary,
-    borderRadius: radius.md,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
+    marginTop: spacing.lg, backgroundColor: colors.primary, borderRadius: radius.md,
+    paddingVertical: spacing.md, alignItems: 'center',
   },
-  submitText: {
-    color: colors.white,
-    fontSize: font.body,
-    fontWeight: '700',
+  submitText: { color: colors.textOnAurora, fontSize: font.body, fontWeight: '700' },
+  deleteBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
+    paddingVertical: spacing.md, marginTop: spacing.xs,
   },
+  deleteText: { color: colors.danger, fontSize: font.body, fontWeight: '600' },
 });
