@@ -1,12 +1,10 @@
 /**
- * SegmentedControl — un petit sélecteur à segments (Jour / Semaine / Mois).
- *
- * Générique et réutilisable : on lui donne une liste d'options, l'option
- * active, et un callback. Il ne sait rien du calendrier.
+ * SegmentedControl — sélecteur à segments façon iOS (Jour / Semaine / Mois).
+ * Piste creuse + pastille active pleine avec une ombre douce. Thémé.
  */
 
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { colors, font, radius, spacing } from '@/theme';
+import { font, radius, softShadow, spacing, useC } from '@/theme';
 
 type Props<T extends string> = {
   options: readonly T[];
@@ -14,22 +12,19 @@ type Props<T extends string> = {
   onChange: (value: T) => void;
 };
 
-export function SegmentedControl<T extends string>({
-  options,
-  value,
-  onChange,
-}: Props<T>) {
+export function SegmentedControl<T extends string>({ options, value, onChange }: Props<T>) {
+  const c = useC();
   return (
-    <View style={styles.track}>
+    <View style={[styles.track, { backgroundColor: c.surfaceAlt }]}>
       {options.map((opt) => {
         const active = opt === value;
         return (
           <Pressable
             key={opt}
             onPress={() => onChange(opt)}
-            style={[styles.segment, active && styles.segmentActive]}
+            style={[styles.segment, active && [styles.active, softShadow, { backgroundColor: c.surface }]]}
           >
-            <Text style={[styles.label, active && styles.labelActive]}>{opt}</Text>
+            <Text style={[styles.label, { color: active ? c.text : c.textMuted }]}>{opt}</Text>
           </Pressable>
         );
       })}
@@ -38,26 +33,12 @@ export function SegmentedControl<T extends string>({
 }
 
 const styles = StyleSheet.create({
-  track: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF22', // léger voile clair sur le dégradé
-    borderRadius: radius.pill,
-    padding: 3,
-  },
+  track: { flexDirection: 'row', borderRadius: radius.sm, padding: 2 },
   segment: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs + 2,
-    borderRadius: radius.pill,
+    borderRadius: radius.sm - 2,
   },
-  segmentActive: {
-    backgroundColor: colors.textOnDark, // pastille claire = segment actif
-  },
-  label: {
-    fontSize: font.small,
-    fontWeight: '600',
-    color: colors.textOnDark,
-  },
-  labelActive: {
-    color: colors.primaryDark, // texte sombre sur la pastille claire
-  },
+  active: {},
+  label: { fontSize: font.small, fontWeight: '600' },
 });

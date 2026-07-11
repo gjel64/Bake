@@ -33,7 +33,7 @@ import {
   updateEvent,
 } from '@/db/database';
 import { fromDayKey, labelDayLong, toDayKey, toTimeKey } from '@/lib/dates';
-import { colors, font, radius, spacing } from '@/theme';
+import { font, radius, spacing, useC, type Palette } from '@/theme';
 
 type Props = {
   visible: boolean;
@@ -64,6 +64,8 @@ export function AddEventModal({
   onClose,
   onSaved,
 }: Props) {
+  const c = useC();
+  const styles = makeStyles(c);
   const [title, setTitle] = useState('');
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [linkTodoId, setLinkTodoId] = useState<number | null>(null);
@@ -160,7 +162,7 @@ export function AddEventModal({
                       <Ionicons
                         name="checkbox-outline"
                         size={15}
-                        color={t.cat_color ?? colors.textMuted}
+                        color={t.cat_color ?? c.textMuted}
                       />
                       <Text style={styles.todoChipText} numberOfLines={1}>{t.title}</Text>
                     </Pressable>
@@ -173,7 +175,7 @@ export function AddEventModal({
               value={title}
               onChangeText={setTitle}
               placeholder="Travail, sport, méditation…"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={c.textMuted}
               style={styles.input}
             />
 
@@ -197,7 +199,7 @@ export function AddEventModal({
 
             {linkTodoId !== null && (
               <View style={styles.linkNote}>
-                <Ionicons name="link-outline" size={14} color={colors.aurora} />
+                <Ionicons name="link-outline" size={14} color={c.aurora} />
                 <Text style={styles.linkNoteText}>Lié à un to-do (coché des deux côtés)</Text>
               </View>
             )}
@@ -215,7 +217,7 @@ export function AddEventModal({
 
             {event && (
               <Pressable onPress={remove} style={styles.deleteBtn}>
-                <Ionicons name="trash-outline" size={18} color={colors.danger} />
+                <Ionicons name="trash-outline" size={18} color={c.danger} />
                 <Text style={styles.deleteText}>Supprimer</Text>
               </Pressable>
             )}
@@ -246,26 +248,28 @@ function PickerRow({
   value: string;
   onPress: () => void;
 }) {
+  const c = useC();
+  const styles = makeStyles(c);
   return (
     <Pressable onPress={onPress} style={styles.pickerRow}>
-      <Ionicons name={icon} size={18} color={colors.primary} />
+      <Ionicons name={icon} size={18} color={c.primary} />
       <View style={{ flex: 1 }}>
         <Text style={styles.pickerLabel}>{label}</Text>
         <Text style={styles.pickerValue}>{value}</Text>
       </View>
-      <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+      <Ionicons name="chevron-forward" size={18} color={c.textMuted} />
     </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: '#0009' },
   sheetWrap: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
     maxHeight: '88%',
-    backgroundColor: colors.nightAlt,
+    backgroundColor: c.nightAlt,
     borderTopWidth: 1,
-    borderColor: colors.glassBorder,
+    borderColor: c.glassBorder,
     borderTopLeftRadius: radius.lg,
     borderTopRightRadius: radius.lg,
     padding: spacing.lg,
@@ -273,46 +277,46 @@ const styles = StyleSheet.create({
   },
   handle: {
     alignSelf: 'center', width: 44, height: 5, borderRadius: radius.pill,
-    backgroundColor: colors.border, marginBottom: spacing.md,
+    backgroundColor: c.border, marginBottom: spacing.md,
   },
-  title: { fontSize: font.heading, fontWeight: '700', color: colors.text, marginBottom: spacing.md },
+  title: { fontSize: font.heading, fontWeight: '700', color: c.text, marginBottom: spacing.md },
   input: {
-    backgroundColor: colors.surfaceAlt, borderRadius: radius.sm,
+    backgroundColor: c.surfaceAlt, borderRadius: radius.sm,
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 2,
-    fontSize: font.body, color: colors.text, marginTop: spacing.sm,
+    fontSize: font.body, color: c.text, marginTop: spacing.sm,
   },
-  label: { fontSize: font.small, color: colors.textMuted, marginTop: spacing.md, marginBottom: spacing.xs },
+  label: { fontSize: font.small, color: c.textMuted, marginTop: spacing.md, marginBottom: spacing.xs },
   todoRow: { flexGrow: 0, marginBottom: spacing.xs },
   todoChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 200,
-    borderWidth: 1.5, borderColor: colors.glassBorder, borderRadius: radius.pill,
+    borderWidth: 1.5, borderColor: c.glassBorder, borderRadius: radius.pill,
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm, marginRight: spacing.sm,
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: c.surfaceAlt,
   },
-  todoChipActive: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
-  todoChipText: { fontSize: font.small, color: colors.text },
+  todoChipActive: { borderColor: c.primary, backgroundColor: c.primarySoft },
+  todoChipText: { fontSize: font.small, color: c.text },
   timesRow: { flexDirection: 'row', gap: spacing.sm },
   timeCol: { flex: 1 },
   pickerRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-    backgroundColor: colors.surfaceAlt, borderRadius: radius.sm,
+    backgroundColor: c.surfaceAlt, borderRadius: radius.sm,
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm, marginTop: spacing.sm,
   },
-  pickerLabel: { fontSize: font.small, color: colors.textMuted },
-  pickerValue: { fontSize: font.body, color: colors.text, fontWeight: '600' },
+  pickerLabel: { fontSize: font.small, color: c.textMuted },
+  pickerValue: { fontSize: font.body, color: c.text, fontWeight: '600' },
   linkNote: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
     marginTop: spacing.md,
   },
-  linkNoteText: { fontSize: font.small, color: colors.aurora },
+  linkNoteText: { fontSize: font.small, color: c.aurora },
   submit: {
-    marginTop: spacing.lg, backgroundColor: colors.primary, borderRadius: radius.md,
+    marginTop: spacing.lg, backgroundColor: c.primary, borderRadius: radius.md,
     paddingVertical: spacing.md, alignItems: 'center',
   },
-  submitText: { color: colors.textOnAurora, fontSize: font.body, fontWeight: '700' },
+  submitText: { color: c.textOnAurora, fontSize: font.body, fontWeight: '700' },
   deleteBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
     paddingVertical: spacing.md, marginTop: spacing.xs,
   },
-  deleteText: { color: colors.danger, fontSize: font.body, fontWeight: '600' },
+  deleteText: { color: c.danger, fontSize: font.body, fontWeight: '600' },
 });

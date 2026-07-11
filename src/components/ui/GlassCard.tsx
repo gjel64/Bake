@@ -1,57 +1,40 @@
 /**
- * GlassCard — une carte en « verre givré » (glassmorphism).
+ * GlassCard — une carte iOS solide (coins arrondis, séparateur fin, ombre douce).
  *
- * On empile : une lueur portée (glow), un flou (BlurView) qui trouble ce qui
- * est derrière, et un voile clair translucide + liseré pour l'effet verre.
- * Un fond translucide de secours garantit le rendu même si le flou est faible
- * sur certains appareils Android.
+ * (Nom conservé pour ne pas toucher aux écrans.) Plus de flou : sur un fond uni,
+ * une carte pleine `surface` est plus lisible et plus « iOS ».
  */
 
 import { ReactNode } from 'react';
 import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
-import { BlurView } from 'expo-blur';
-import { colors, radius, spacing } from '@/theme';
+import { radius, softShadow, spacing, useC } from '@/theme';
 
 type Props = {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
-  /** Halo aurore sous la carte (par défaut) ou ombre neutre discrète. */
-  glow?: boolean;
-  /** Padding intérieur (par défaut : spacing.lg). */
+  glow?: boolean; // conservé pour compat (même ombre douce)
   padding?: number;
 };
 
-export function GlassCard({ children, style, glow = false, padding }: Props) {
+export function GlassCard({ children, style, padding }: Props) {
+  const c = useC();
   return (
-    <View style={[styles.wrap, style]}>
-      <BlurView
-        intensity={24}
-        tint="dark"
-        // Active un vrai flou sur Android (ignoré sur iOS qui floute nativement).
-        experimentalBlurMethod="dimezisBlurView"
-        style={styles.blur}
-      >
-        <View style={[styles.inner, { padding: padding ?? spacing.lg }]}>
-          {children}
-        </View>
-      </BlurView>
+    <View
+      style={[
+        styles.card,
+        softShadow,
+        { backgroundColor: c.surface, borderColor: c.glassBorder, padding: padding ?? spacing.lg },
+        style,
+      ]}
+    >
+      {children}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: {
-    borderRadius: radius.md,
-    // Le flou doit être « découpé » aux coins arrondis :
-    overflow: 'hidden',
-  },
-  blur: {
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    overflow: 'hidden',
-  },
-  inner: {
-    backgroundColor: colors.surface, // voile clair de secours + teinte verre
+  card: {
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
   },
 });

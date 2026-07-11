@@ -1,8 +1,9 @@
 /**
- * CategoryPicker — une rangée de pastilles pour choisir une catégorie.
+ * CategoryPicker — rangée de puces pour choisir une catégorie (thémé).
  *
- * Inclut « Aucune » et un bouton « + » qui ouvre la création de catégorie.
- * Gère lui-même la liste des catégories (rechargée quand on en crée une).
+ * Puce non sélectionnée : fond discret + libellé neutre. Puce sélectionnée :
+ * remplie de la couleur de la catégorie (texte/icône sombre, lisible). Un
+ * bouton « + Catégorie » ouvre la création.
  */
 
 import { useEffect, useState } from 'react';
@@ -10,14 +11,15 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Category, getCategories } from '@/db/database';
 import { CategoryEditModal } from '@/components/CategoryEditModal';
-import { colors, font, radius, spacing } from '@/theme';
+import { font, onSwatch, radius, spacing, useC } from '@/theme';
 
 type Props = {
-  value: number | null; // id de catégorie sélectionnée
+  value: number | null;
   onChange: (id: number | null) => void;
 };
 
 export function CategoryPicker({ value, onChange }: Props) {
+  const c = useC();
   const [cats, setCats] = useState<Category[]>([]);
   const [creating, setCreating] = useState(false);
 
@@ -26,29 +28,24 @@ export function CategoryPicker({ value, onChange }: Props) {
 
   return (
     <View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        {/* Aucune */}
-        <Chip
-          active={value === null}
-          label="Aucune"
-          color={colors.textMuted}
-          onPress={() => onChange(null)}
-        />
-
-        {cats.map((c) => (
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+        <Chip active={value === null} label="Aucune" fill={c.textMuted} onPress={() => onChange(null)} />
+        {cats.map((cat) => (
           <Chip
-            key={c.id}
-            active={value === c.id}
-            label={c.name}
-            color={c.color}
-            icon={c.icon as keyof typeof Ionicons.glyphMap}
-            onPress={() => onChange(c.id)}
+            key={cat.id}
+            active={value === cat.id}
+            label={cat.name}
+            fill={cat.color}
+            icon={cat.icon as keyof typeof Ionicons.glyphMap}
+            onPress={() => onChange(cat.id)}
           />
         ))}
-
-        {/* Nouvelle catégorie */}
-        <Pressable onPress={() => setCreating(true)} style={styles.addChip}>
-          <Ionicons name="add" size={18} color={colors.text} />
+        <Pressable
+          onPress={() => setCreating(true)}
+          style={[styles.addChip, { backgroundColor: c.surfaceAlt }]}
+        >
+          <Ionicons name="add" size={16} color={c.primary} />
+          <Text style={[styles.addText, { color: c.primary }]}>Catégorie</Text>
         </Pressable>
       </ScrollView>
 
@@ -57,11 +54,10 @@ export function CategoryPicker({ value, onChange }: Props) {
         category={null}
         onClose={() => setCreating(false)}
         onSaved={() => {
-          const before = new Set(cats.map((c) => c.id));
+          const before = new Set(cats.map((x) => x.id));
           const next = getCategories();
           setCats(next);
-          // sélectionne automatiquement la catégorie fraîchement créée
-          const created = next.find((c) => !before.has(c.id));
+          const created = next.find((x) => !before.has(x.id));
           if (created) onChange(created.id);
         }}
       />
@@ -72,51 +68,49 @@ export function CategoryPicker({ value, onChange }: Props) {
 function Chip({
   active,
   label,
-  color,
+  fill,
   icon,
   onPress,
 }: {
   active: boolean;
   label: string;
-  color: string;
+  fill: string; // couleur de remplissage quand sélectionnée
   icon?: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
 }) {
+  const c = useC();
   return (
     <Pressable
       onPress={onPress}
       style={[
         styles.chip,
-        { borderColor: active ? color : colors.glassBorder },
-        active && { backgroundColor: color + '33' },
+        active ? { backgroundColor: fill } : { backgroundColor: c.surfaceAlt },
       ]}
     >
-      {icon ? <Ionicons name={icon} size={15} color={color} /> : null}
-      <Text style={[styles.chipText, active && { color: colors.text }]}>{label}</Text>
+      {icon ? <Ionicons name={icon} size={15} color={active ? onSwatch : fill} /> : null}
+      <Text style={[styles.chipText, { color: active ? onSwatch : c.text }]}>{label}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
+  row: { gap: spacing.sm, paddingVertical: 2 },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    borderWidth: 1.5,
     borderRadius: radius.pill,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    marginRight: spacing.sm,
+    height: 36,
   },
-  chipText: { fontSize: font.small, color: colors.textMuted, fontWeight: '600' },
+  chipText: { fontSize: font.small, fontWeight: '600' },
   addChip: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
-    borderColor: colors.glassBorder,
-    backgroundColor: colors.surfaceAlt,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 5,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    height: 36,
   },
+  addText: { fontSize: font.small, fontWeight: '600' },
 });

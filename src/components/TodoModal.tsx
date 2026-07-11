@@ -27,7 +27,7 @@ import { CategoryPicker } from '@/components/CategoryPicker';
 import { PriorityPicker } from '@/components/PriorityPicker';
 import { Todo, addTodo, deleteTodo, updateTodo } from '@/db/database';
 import { cancelReminder, scheduleReminder } from '@/lib/notifications';
-import { colors, font, radius, spacing } from '@/theme';
+import { font, radius, spacing, useC, type Palette } from '@/theme';
 
 type Props = {
   visible: boolean;
@@ -56,6 +56,8 @@ function formatRemind(d: Date): string {
 }
 
 export function TodoModal({ visible, todo, onClose, onSaved }: Props) {
+  const c = useC();
+  const styles = makeStyles(c);
   const [title, setTitle] = useState('');
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [priority, setPriority] = useState(1);
@@ -128,7 +130,7 @@ export function TodoModal({ visible, todo, onClose, onSaved }: Props) {
               value={title}
               onChangeText={setTitle}
               placeholder="Que faut-il faire ?"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={c.textMuted}
               style={styles.input}
               autoFocus={!todo}
             />
@@ -144,7 +146,7 @@ export function TodoModal({ visible, todo, onClose, onSaved }: Props) {
               value={notes}
               onChangeText={setNotes}
               placeholder="Détails (optionnel)"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={c.textMuted}
               style={[styles.input, styles.multiline]}
               multiline
             />
@@ -152,20 +154,20 @@ export function TodoModal({ visible, todo, onClose, onSaved }: Props) {
             {/* Rappel */}
             <View style={styles.remindRow}>
               <View style={styles.remindLeft}>
-                <Ionicons name="notifications-outline" size={18} color={colors.aurora} />
+                <Ionicons name="notifications-outline" size={18} color={c.aurora} />
                 <Text style={styles.remindLabel}>Rappel</Text>
               </View>
               <Switch
                 value={remindOn}
                 onValueChange={setRemindOn}
-                trackColor={{ true: colors.primary, false: colors.surfaceStrong }}
-                thumbColor={colors.white}
+                trackColor={{ true: c.primary, false: c.surfaceStrong }}
+                thumbColor={c.white}
               />
             </View>
             {remindOn && (
               <View style={styles.remindPickers}>
                 <Pressable onPress={() => setPicker('date')} style={styles.remindPick}>
-                  <Ionicons name="calendar-outline" size={16} color={colors.primary} />
+                  <Ionicons name="calendar-outline" size={16} color={c.primary} />
                   <Text style={styles.remindPickText}>{formatRemind(remindDate)}</Text>
                 </Pressable>
               </View>
@@ -184,7 +186,7 @@ export function TodoModal({ visible, todo, onClose, onSaved }: Props) {
 
             {todo && (
               <Pressable onPress={remove} style={styles.deleteBtn}>
-                <Ionicons name="trash-outline" size={18} color={colors.danger} />
+                <Ionicons name="trash-outline" size={18} color={c.danger} />
                 <Text style={styles.deleteText}>Supprimer</Text>
               </Pressable>
             )}
@@ -223,14 +225,14 @@ export function TodoModal({ visible, todo, onClose, onSaved }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: '#0009' },
   sheetWrap: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
     maxHeight: '88%',
-    backgroundColor: colors.nightAlt,
+    backgroundColor: c.nightAlt,
     borderTopWidth: 1,
-    borderColor: colors.glassBorder,
+    borderColor: c.glassBorder,
     borderTopLeftRadius: radius.lg,
     borderTopRightRadius: radius.lg,
     padding: spacing.lg,
@@ -238,37 +240,37 @@ const styles = StyleSheet.create({
   },
   handle: {
     alignSelf: 'center', width: 44, height: 5, borderRadius: radius.pill,
-    backgroundColor: colors.border, marginBottom: spacing.md,
+    backgroundColor: c.border, marginBottom: spacing.md,
   },
-  title: { fontSize: font.heading, fontWeight: '700', color: colors.text, marginBottom: spacing.md },
+  title: { fontSize: font.heading, fontWeight: '700', color: c.text, marginBottom: spacing.md },
   input: {
-    backgroundColor: colors.surfaceAlt, borderRadius: radius.sm,
+    backgroundColor: c.surfaceAlt, borderRadius: radius.sm,
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 2,
-    fontSize: font.body, color: colors.text,
+    fontSize: font.body, color: c.text,
   },
   multiline: { minHeight: 64, textAlignVertical: 'top', marginTop: 0 },
-  label: { fontSize: font.small, color: colors.textMuted, marginTop: spacing.md, marginBottom: spacing.xs },
+  label: { fontSize: font.small, color: c.textMuted, marginTop: spacing.md, marginBottom: spacing.xs },
   remindRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginTop: spacing.md,
   },
   remindLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  remindLabel: { fontSize: font.body, color: colors.text, fontWeight: '600' },
+  remindLabel: { fontSize: font.body, color: c.text, fontWeight: '600' },
   remindPickers: { marginTop: spacing.sm },
   remindPick: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm, alignSelf: 'flex-start',
-    backgroundColor: colors.surfaceAlt, borderRadius: radius.sm,
+    backgroundColor: c.surfaceAlt, borderRadius: radius.sm,
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
   },
-  remindPickText: { fontSize: font.body, color: colors.text, fontWeight: '600' },
+  remindPickText: { fontSize: font.body, color: c.text, fontWeight: '600' },
   submit: {
-    marginTop: spacing.lg, backgroundColor: colors.primary, borderRadius: radius.md,
+    marginTop: spacing.lg, backgroundColor: c.primary, borderRadius: radius.md,
     paddingVertical: spacing.md, alignItems: 'center',
   },
-  submitText: { color: colors.textOnAurora, fontSize: font.body, fontWeight: '700' },
+  submitText: { color: c.textOnAurora, fontSize: font.body, fontWeight: '700' },
   deleteBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
     paddingVertical: spacing.md, marginTop: spacing.xs,
   },
-  deleteText: { color: colors.danger, fontSize: font.body, fontWeight: '600' },
+  deleteText: { color: c.danger, fontSize: font.body, fontWeight: '600' },
 });

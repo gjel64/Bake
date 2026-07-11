@@ -21,7 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { CategoryEditModal } from '@/components/CategoryEditModal';
 import { Category, deleteCategory, getCategories } from '@/db/database';
 import { exportToFile, importFromFile } from '@/lib/backup';
-import { colors, font, radius, spacing } from '@/theme';
+import { font, onSwatch, radius, spacing, useC, type Palette } from '@/theme';
 
 export function SettingsModal({
   visible,
@@ -30,6 +30,8 @@ export function SettingsModal({
   visible: boolean;
   onClose: () => void;
 }) {
+  const c = useC();
+  const styles = makeStyles(c);
   const [cats, setCats] = useState<Category[]>([]);
   const [editing, setEditing] = useState<Category | null>(null);
   const [catModal, setCatModal] = useState(false);
@@ -101,7 +103,7 @@ export function SettingsModal({
           <View style={styles.header}>
             <Text style={styles.headerTitle}>Réglages</Text>
             <Pressable onPress={onClose} hitSlop={10} style={styles.closeBtn}>
-              <Ionicons name="close" size={24} color={colors.text} />
+              <Ionicons name="close" size={24} color={c.text} />
             </Pressable>
           </View>
 
@@ -128,28 +130,28 @@ export function SettingsModal({
                 hitSlop={8}
                 style={styles.addCat}
               >
-                <Ionicons name="add" size={18} color={colors.textOnAurora} />
+                <Ionicons name="add" size={18} color={c.textOnAurora} />
               </Pressable>
             </View>
 
-            {cats.map((c) => (
-              <View key={c.id} style={styles.catRow}>
-                <View style={[styles.catIcon, { backgroundColor: c.color }]}>
-                  <Ionicons name={c.icon as keyof typeof Ionicons.glyphMap} size={18} color={colors.textOnAurora} />
+            {cats.map((cat) => (
+              <View key={cat.id} style={styles.catRow}>
+                <View style={[styles.catIcon, { backgroundColor: cat.color }]}>
+                  <Ionicons name={cat.icon as keyof typeof Ionicons.glyphMap} size={18} color={onSwatch} />
                 </View>
-                <Text style={styles.catName}>{c.name}</Text>
+                <Text style={styles.catName}>{cat.name}</Text>
                 <Pressable
                   onPress={() => {
-                    setEditing(c);
+                    setEditing(cat);
                     setCatModal(true);
                   }}
                   hitSlop={8}
                   style={styles.catAction}
                 >
-                  <Ionicons name="pencil" size={18} color={colors.textMuted} />
+                  <Ionicons name="pencil" size={18} color={c.textMuted} />
                 </Pressable>
-                <Pressable onPress={() => askDeleteCat(c)} hitSlop={8} style={styles.catAction}>
-                  <Ionicons name="trash-outline" size={18} color={colors.danger} />
+                <Pressable onPress={() => askDeleteCat(cat)} hitSlop={8} style={styles.catAction}>
+                  <Ionicons name="trash-outline" size={18} color={c.danger} />
                 </Pressable>
               </View>
             ))}
@@ -158,7 +160,7 @@ export function SettingsModal({
 
         {busy && (
           <View style={styles.busy}>
-            <ActivityIndicator size="large" color={colors.aurora} />
+            <ActivityIndicator size="large" color={c.aurora} />
           </View>
         )}
 
@@ -182,47 +184,49 @@ function BigButton({
   label: string;
   onPress: () => void;
 }) {
+  const c = useC();
+  const styles = makeStyles(c);
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.bigBtn, pressed && { opacity: 0.7 }]}>
-      <Ionicons name={icon} size={24} color={colors.aurora} />
+      <Ionicons name={icon} size={24} color={c.aurora} />
       <Text style={styles.bigBtnText}>{label}</Text>
     </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
+const makeStyles = (c: Palette) => StyleSheet.create({
+  root: { flex: 1, backgroundColor: c.bg },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
   },
-  headerTitle: { fontSize: font.title, fontWeight: '700', color: colors.text },
+  headerTitle: { fontSize: font.title, fontWeight: '700', color: c.text },
   closeBtn: {
-    width: 40, height: 40, borderRadius: radius.pill, backgroundColor: colors.surface,
+    width: 40, height: 40, borderRadius: radius.pill, backgroundColor: c.surface,
     alignItems: 'center', justifyContent: 'center',
   },
   body: { padding: spacing.lg, gap: spacing.sm, paddingBottom: spacing.xl * 2 },
-  section: { fontSize: font.small, fontWeight: '700', color: colors.textMuted, letterSpacing: 1, marginTop: spacing.md },
+  section: { fontSize: font.small, fontWeight: '700', color: c.textMuted, letterSpacing: 1, marginTop: spacing.md },
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.lg },
-  hint: { fontSize: font.small, color: colors.textMuted, marginBottom: spacing.sm, lineHeight: 19 },
+  hint: { fontSize: font.small, color: c.textMuted, marginBottom: spacing.sm, lineHeight: 19 },
   cardRow: { flexDirection: 'row', gap: spacing.md },
   bigBtn: {
     flex: 1, alignItems: 'center', gap: spacing.xs,
-    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.glassBorder,
+    backgroundColor: c.surface, borderWidth: 1, borderColor: c.glassBorder,
     borderRadius: radius.md, paddingVertical: spacing.lg,
   },
-  bigBtnText: { fontSize: font.body, color: colors.text, fontWeight: '600' },
+  bigBtnText: { fontSize: font.body, color: c.text, fontWeight: '600' },
   addCat: {
-    width: 30, height: 30, borderRadius: radius.pill, backgroundColor: colors.primary,
+    width: 30, height: 30, borderRadius: radius.pill, backgroundColor: c.primary,
     alignItems: 'center', justifyContent: 'center',
   },
   catRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.glassBorder,
+    backgroundColor: c.surface, borderWidth: 1, borderColor: c.glassBorder,
     borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
   },
   catIcon: { width: 36, height: 36, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
-  catName: { flex: 1, fontSize: font.body, color: colors.text, fontWeight: '600' },
+  catName: { flex: 1, fontSize: font.body, color: c.text, fontWeight: '600' },
   catAction: { padding: spacing.xs },
   busy: { ...StyleSheet.absoluteFillObject, backgroundColor: '#0007', alignItems: 'center', justifyContent: 'center' },
 });

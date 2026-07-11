@@ -1,14 +1,10 @@
 /**
- * MiniBars — un petit histogramme (ex : minutes méditées sur 7 jours).
- *
- * Rendu en Views + dégradés (pas de SVG) : la mise en page flex gère les
- * largeurs toute seule, c'est robuste et lisible. Chaque barre a une piste de
- * fond discrète et un remplissage aurore.
+ * MiniBars — un petit histogramme (Views + dégradés), thémé clair/sombre.
  */
 
 import { StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { colors, font, radius, spacing } from '@/theme';
+import { font, gradients, radius, spacing, useC } from '@/theme';
 
 export type BarDatum = { label: string; value: number };
 
@@ -18,11 +14,8 @@ type Props = {
   colorsPair?: readonly [string, string];
 };
 
-export function MiniBars({
-  data,
-  height = 120,
-  colorsPair = [colors.aurora, colors.aurora2],
-}: Props) {
+export function MiniBars({ data, height = 120, colorsPair = gradients.aurora }: Props) {
+  const c = useC();
   const max = Math.max(...data.map((d) => d.value), 1);
 
   return (
@@ -33,11 +26,9 @@ export function MiniBars({
           const active = d.value > 0;
           return (
             <View key={i} style={styles.col}>
-              {/* Piste de fond */}
-              <View style={[styles.track, { height }]} />
-              {/* Barre */}
+              <View style={[styles.track, { height, backgroundColor: c.surfaceAlt }]} />
               <LinearGradient
-                colors={active ? colorsPair : [colors.surfaceStrong, colors.surfaceStrong]}
+                colors={active ? colorsPair : [c.surfaceAlt, c.surfaceAlt]}
                 start={{ x: 0, y: 1 }}
                 end={{ x: 0, y: 0 }}
                 style={[styles.bar, { height: barH }]}
@@ -46,11 +37,9 @@ export function MiniBars({
           );
         })}
       </View>
-
-      {/* Étiquettes sous les barres */}
       <View style={styles.labels}>
         {data.map((d, i) => (
-          <Text key={i} style={styles.label} numberOfLines={1}>
+          <Text key={i} style={[styles.label, { color: c.textMuted }]} numberOfLines={1}>
             {d.label}
           </Text>
         ))}
@@ -60,36 +49,10 @@ export function MiniBars({
 }
 
 const styles = StyleSheet.create({
-  chart: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: spacing.sm,
-  },
-  col: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-  },
-  track: {
-    position: 'absolute',
-    bottom: 0,
-    width: '66%',
-    borderRadius: radius.sm,
-    backgroundColor: colors.surface,
-  },
-  bar: {
-    width: '66%',
-    borderRadius: radius.sm,
-  },
-  labels: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  label: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: font.tiny,
-    color: colors.textMuted,
-  },
+  chart: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm },
+  col: { flex: 1, alignItems: 'center', justifyContent: 'flex-end' },
+  track: { position: 'absolute', bottom: 0, width: '66%', borderRadius: radius.sm },
+  bar: { width: '66%', borderRadius: radius.sm },
+  labels: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
+  label: { flex: 1, textAlign: 'center', fontSize: font.tiny },
 });

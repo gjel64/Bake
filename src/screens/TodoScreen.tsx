@@ -35,19 +35,25 @@ import {
   toggleTodoDone,
 } from '@/db/database';
 import { todayKey } from '@/lib/dates';
-import { colors, font, radius, spacing } from '@/theme';
+import { font, radius, spacing, useC, type Palette } from '@/theme';
 
 if (Platform.OS === 'android') {
   UIManager.setLayoutAnimationEnabledExperimental?.(true);
 }
 
+const GROUP_MODES = ['Catégorie', 'Priorité'] as const;
+type GroupMode = (typeof GROUP_MODES)[number];
+
 export function TodoScreen() {
+  const c = useC();
+  const styles = makeStyles(c);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [cats, setCats] = useState<Category[]>([]);
   const [editing, setEditing] = useState<Todo | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [scheduling, setScheduling] = useState<Todo | null>(null);
   const [doneOpen, setDoneOpen] = useState(false);
+  const [groupMode, setGroupMode] = useState<GroupMode>('Catégorie');
 
   const refresh = useCallback(() => {
     setTodos(getTodos());
@@ -59,17 +65,29 @@ export function TodoScreen() {
   const pending = todos.filter((t) => t.done === 0);
   const done = todos.filter((t) => t.done === 1);
 
-  // Groupes « à faire » : une entrée par catégorie non vide, puis « Sans catégorie ».
+  // Groupes « à faire » : par catégorie, ou par priorité selon la vue choisie.
   const groups = useMemo(() => {
     const out: { key: string; label: string; color: string; icon: string; items: Todo[] }[] = [];
-    for (const c of cats) {
-      const items = pending.filter((t) => t.category_id === c.id);
-      if (items.length) out.push({ key: `c${c.id}`, label: c.name, color: c.color, icon: c.icon, items });
+
+    if (groupMode === 'Priorité') {
+      const icons = ['chevron-down-outline', 'remove-outline', 'chevron-up-outline']; // basse, moyenne, haute
+      for (const p of [2, 1, 0]) {
+        const items = pending.filter((t) => t.priority === p);
+        if (items.length) {
+          out.push({ key: `p${p}`, label: PRIORITY_META[p].label, color: PRIORITY_META[p].color, icon: icons[p], items });
+        }
+      }
+      return out;
+    }
+
+    for (const cat of cats) {
+      const items = pending.filter((t) => t.category_id === cat.id);
+      if (items.length) out.push({ key: `c${cat.id}`, label: cat.name, color: cat.color, icon: cat.icon, items });
     }
     const none = pending.filter((t) => t.category_id === null);
-    if (none.length) out.push({ key: 'none', label: 'Sans catégorie', color: colors.textMuted, icon: 'ellipse-outline', items: none });
+    if (none.length) out.push({ key: 'none', label: 'Sans catégorie', color: c.textMuted, icon: 'ellipse-outline', items: none });
     return out;
-  }, [cats, pending]);
+  }, [cats, pending, groupMode, c]);
 
   function toggle(t: Todo) {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -94,6 +112,25 @@ export function TodoScreen() {
           subtitle={pending.length === 0 ? 'Rien en attente — souffle.' : `${pending.length} à faire`}
         />
 
+        <View style={styles.modeRow}>
+          <View style={styles.toggle}>
+            {GROUP_MODES.map((m) => {
+              const active = groupMode === m;
+              const ic = m === 'Catégorie' ? 'pricetags-outline' : 'flag-outline';
+              return (
+                <Pressable
+                  key={m}
+                  onPress={() => setGroupMode(m)}
+                  style={[styles.toggleBtn, active && { backgroundColor: c.primary }]}
+                >
+                  <Ionicons name={ic} size={15} color={active ? c.textOnAurora : c.textMuted} />
+                  <Text style={[styles.toggleText, { color: active ? c.textOnAurora : c.textMuted }]}>{m}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
         <ScrollView contentContainerStyle={styles.list}>
           {groups.map((g) => (
             <View key={g.key} style={styles.group}>
@@ -115,7 +152,7 @@ export function TodoScreen() {
 
           {groups.length === 0 && (
             <View style={styles.empty}>
-              <Ionicons name="checkmark-done-outline" size={52} color={colors.primary} />
+              <Ionicons name="checkmark-done-outline" size={52} color={c.primary} />
               <Text style={styles.emptyText}>Aucune tâche en attente. Ajoute-en une avec +.</Text>
             </View>
           )}
@@ -124,7 +161,7 @@ export function TodoScreen() {
           {done.length > 0 && (
             <View style={styles.group}>
               <Pressable onPress={() => setDoneOpen((v) => !v)} style={styles.doneHead}>
-                <Ionicons name={doneOpen ? 'chevron-down' : 'chevron-forward'} size={16} color={colors.textMuted} />
+                <Ionicons name={doneOpen ? 'chevron-down' : 'chevron-forward'} size={16} color={c.textMuted} />
                 <Text style={styles.doneTitle}>Terminé ({done.length})</Text>
               </Pressable>
               {doneOpen &&
@@ -145,7 +182,7 @@ export function TodoScreen() {
           onPress={openAdd}
           style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85 }]}
         >
-          <Ionicons name="add" size={30} color={colors.textOnAurora} />
+          <Ionicons name="add" size={30} color={c.textOnAurora} />
         </Pressable>
 
         <TodoModal
@@ -181,6 +218,8 @@ function TodoRow({
   onEdit: () => void;
   onSchedule: () => void;
 }) {
+  const c = useC();
+  const styles = makeStyles(c);
   const done = todo.done === 1;
   const prio = PRIORITY_META[todo.priority] ?? PRIORITY_META[1];
 
@@ -188,7 +227,7 @@ function TodoRow({
     <Pressable onPress={onEdit} style={styles.row}>
       {/* Case à cocher */}
       <Pressable onPress={onToggle} hitSlop={8} style={[styles.check, done && styles.checkDone]}>
-        {done && <Ionicons name="checkmark" size={16} color={colors.textOnAurora} />}
+        {done && <Ionicons name="checkmark" size={16} color={c.textOnAurora} />}
       </Pressable>
 
       <View style={styles.rowBody}>
@@ -200,7 +239,7 @@ function TodoRow({
         ) : null}
         {todo.remind_at ? (
           <View style={styles.remindTag}>
-            <Ionicons name="notifications-outline" size={12} color={colors.aurora} />
+            <Ionicons name="notifications-outline" size={12} color={c.aurora} />
             <Text style={styles.remindText}>
               {new Date(todo.remind_at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
             </Text>
@@ -213,56 +252,74 @@ function TodoRow({
 
       {/* Planifié / planifier */}
       {todo.scheduled === 1 ? (
-        <Ionicons name="calendar" size={18} color={colors.aurora} style={styles.calIcon} />
+        <Ionicons name="calendar" size={18} color={c.aurora} style={styles.calIcon} />
       ) : (
         <Pressable onPress={onSchedule} hitSlop={8} style={styles.calBtn}>
-          <Ionicons name="calendar-outline" size={18} color={colors.textMuted} />
+          <Ionicons name="calendar-outline" size={18} color={c.textMuted} />
         </Pressable>
       )}
     </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
-  list: { padding: spacing.lg, paddingBottom: 120, gap: spacing.md },
+  modeRow: { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm },
+  toggle: {
+    flexDirection: 'row',
+    alignSelf: 'flex-start',
+    backgroundColor: c.surfaceAlt,
+    borderRadius: radius.pill,
+    padding: 3,
+    gap: 2,
+  },
+  toggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm - 1,
+    borderRadius: radius.pill,
+  },
+  toggleText: { fontSize: font.small, fontWeight: '600' },
+  list: { padding: spacing.lg, paddingBottom: 150, gap: spacing.md },
   group: { gap: spacing.xs },
   groupHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xs, marginTop: spacing.sm },
   groupTitle: { fontSize: font.small, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
   doneHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md },
-  doneTitle: { fontSize: font.small, fontWeight: '700', color: colors.textMuted },
+  doneTitle: { fontSize: font.small, fontWeight: '700', color: c.textMuted },
 
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    backgroundColor: colors.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: colors.glassBorder,
+    borderColor: c.glassBorder,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
   },
   check: {
     width: 26, height: 26, borderRadius: radius.pill, borderWidth: 2,
-    borderColor: colors.primary, alignItems: 'center', justifyContent: 'center',
+    borderColor: c.primary, alignItems: 'center', justifyContent: 'center',
   },
-  checkDone: { backgroundColor: colors.primary },
+  checkDone: { backgroundColor: c.primary },
   rowBody: { flex: 1 },
-  rowTitle: { fontSize: font.body, color: colors.text, fontWeight: '600' },
-  rowTitleDone: { color: colors.textMuted, textDecorationLine: 'line-through' },
-  rowNotes: { fontSize: font.small, color: colors.textMuted, marginTop: 1 },
+  rowTitle: { fontSize: font.body, color: c.text, fontWeight: '600' },
+  rowTitleDone: { color: c.textMuted, textDecorationLine: 'line-through' },
+  rowNotes: { fontSize: font.small, color: c.textMuted, marginTop: 1 },
   remindTag: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
-  remindText: { fontSize: font.tiny, color: colors.aurora },
+  remindText: { fontSize: font.tiny, color: c.aurora },
   prioDot: { width: 10, height: 10, borderRadius: 5 },
   calIcon: { marginLeft: 2 },
   calBtn: { padding: 2 },
 
   empty: { alignItems: 'center', gap: spacing.md, paddingTop: spacing.xl * 2, paddingHorizontal: spacing.xl },
-  emptyText: { fontSize: font.body, color: colors.textMuted, textAlign: 'center' },
+  emptyText: { fontSize: font.body, color: c.textMuted, textAlign: 'center' },
   fab: {
-    position: 'absolute', right: spacing.lg, bottom: spacing.lg,
-    width: 60, height: 60, borderRadius: radius.pill, backgroundColor: colors.primary,
+    position: 'absolute', right: spacing.lg, bottom: spacing.lg + 64,
+    width: 60, height: 60, borderRadius: radius.pill, backgroundColor: c.primary,
     alignItems: 'center', justifyContent: 'center',
     shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 6,
   },

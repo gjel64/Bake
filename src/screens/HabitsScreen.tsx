@@ -37,7 +37,7 @@ import {
   getAllHabits,
   getPendingHabits,
 } from '@/db/database';
-import { colors, font, radius, spacing } from '@/theme';
+import { font, radius, spacing, useC, type Palette } from '@/theme';
 
 // Sur Android, les animations de layout automatiques doivent être activées.
 if (Platform.OS === 'android') {
@@ -51,6 +51,8 @@ export function HabitsScreen() {
   const [cooldown, setCooldown] = useState(0); // jours restants avant nouvel ajout
   const [modalOpen, setModalOpen] = useState(false);
   const [burst, setBurst] = useState(0); // déclencheur de l'envolée de feuilles
+  const c = useC();
+  const styles = makeStyles(c);
 
   /** Recharge tout l'état depuis la base. */
   const refresh = useCallback(() => {
@@ -111,10 +113,10 @@ export function HabitsScreen() {
         ]}
       >
         {canAdd ? (
-          <Ionicons name="add" size={30} color={colors.white} />
+          <Ionicons name="add" size={30} color={c.white} />
         ) : (
           <View style={styles.fabLockedInner}>
-            <Ionicons name="lock-closed" size={16} color={colors.white} />
+            <Ionicons name="lock-closed" size={16} color={c.white} />
             <Text style={styles.fabLockedText}>{cooldown} j</Text>
           </View>
         )}
@@ -135,12 +137,14 @@ export function HabitsScreen() {
 
 /** État « vide » : soit tout est validé, soit aucune habitude n'existe. */
 function EmptyState({ hasHabits }: { hasHabits: boolean }) {
+  const c = useC();
+  const styles = makeStyles(c);
   return (
     <View style={styles.empty}>
       <Ionicons
         name={hasHabits ? 'leaf-outline' : 'sparkles-outline'}
         size={56}
-        color={colors.primary}
+        color={c.primary}
       />
       <Text style={styles.emptyTitle}>
         {hasHabits ? 'Tout est fait pour aujourd’hui' : 'Aucune habitude'}
@@ -154,14 +158,14 @@ function EmptyState({ hasHabits }: { hasHabits: boolean }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: 'transparent',
   },
   list: {
     paddingTop: spacing.md,
-    paddingBottom: 120, // laisse la place au bouton flottant
+    paddingBottom: 150, // place pour le FAB + la tab bar translucide
     flexGrow: 1,
   },
   empty: {
@@ -175,39 +179,39 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: font.heading,
     fontWeight: '700',
-    color: colors.text,
+    color: c.text,
     marginTop: spacing.sm,
     textAlign: 'center',
   },
   emptyText: {
     fontSize: font.body,
-    color: colors.textMuted,
+    color: c.textMuted,
     textAlign: 'center',
   },
   fab: {
     position: 'absolute',
     right: spacing.lg,
-    bottom: spacing.lg,
+    bottom: spacing.lg + 64, // au-dessus de la tab bar translucide
     width: 60,
     height: 60,
     borderRadius: radius.pill,
-    backgroundColor: colors.primary,
+    backgroundColor: c.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: colors.primaryDark,
-    shadowOpacity: 0.3,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
   },
   fabLocked: {
-    backgroundColor: colors.textMuted,
+    backgroundColor: c.textMuted,
   },
   fabLockedInner: {
     alignItems: 'center',
   },
   fabLockedText: {
-    color: colors.white,
+    color: c.white,
     fontSize: font.small,
     fontWeight: '700',
   },

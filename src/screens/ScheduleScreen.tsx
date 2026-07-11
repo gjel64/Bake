@@ -37,12 +37,14 @@ import {
   weekDays,
   WEEKDAYS_SHORT,
 } from '@/lib/dates';
-import { colors, font, radius, spacing } from '@/theme';
+import { font, radius, spacing, useC, type Palette } from '@/theme';
 
 const VIEWS = ['Jour', 'Semaine', 'Mois'] as const;
 type ViewMode = (typeof VIEWS)[number];
 
 export function ScheduleScreen() {
+  const c = useC();
+  const styles = makeStyles(c);
   const [view, setView] = useState<ViewMode>('Jour');
   const [selectedDay, setSelectedDay] = useState<string>(todayKey());
   const [modalOpen, setModalOpen] = useState(false);
@@ -144,7 +146,7 @@ export function ScheduleScreen() {
         onPress={openAdd}
         style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85 }]}
       >
-        <Ionicons name="add" size={30} color={colors.textOnAurora} />
+        <Ionicons name="add" size={30} color={c.textOnAurora} />
       </Pressable>
 
       <AddEventModal
@@ -174,6 +176,8 @@ function DayView({
   onOpen: (ev: EventItem) => void;
   onToggle: (ev: EventItem) => void;
 }) {
+  const c = useC();
+  const styles = makeStyles(c);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [meditationSec, setMeditationSec] = useState(0);
   useEffect(() => {
@@ -198,9 +202,11 @@ function DayView({
 
 /** Bandeau discret « médité X min » (couleur aurore). */
 function MeditationBadge({ seconds }: { seconds: number }) {
+  const c = useC();
+  const styles = makeStyles(c);
   return (
     <View style={styles.medBadge}>
-      <Ionicons name="flower-outline" size={18} color={colors.aurora} />
+      <Ionicons name="flower-outline" size={18} color={c.aurora} />
       <Text style={styles.medBadgeText}>
         Médité {Math.round(seconds / 60)} min
       </Text>
@@ -218,7 +224,9 @@ function EventRow({
   onOpen: (ev: EventItem) => void;
   onToggle: (ev: EventItem) => void;
 }) {
-  const accent = event.color ?? colors.primary;
+  const c = useC();
+  const styles = makeStyles(c);
+  const accent = event.color ?? c.primary;
   const linked = event.todo_id != null;
   const done = event.done === 1;
   return (
@@ -236,17 +244,17 @@ function EventRow({
           hitSlop={8}
           style={[styles.eventCheck, { borderColor: accent }, done && { backgroundColor: accent }]}
         >
-          {done && <Ionicons name="checkmark" size={14} color={colors.textOnAurora} />}
+          {done && <Ionicons name="checkmark" size={14} color={c.textOnAurora} />}
         </Pressable>
       )}
 
       <Text
-        style={[styles.eventTitle, done && { color: colors.textMuted, textDecorationLine: 'line-through' }]}
+        style={[styles.eventTitle, done && { color: c.textMuted, textDecorationLine: 'line-through' }]}
         numberOfLines={1}
       >
         {event.title}
       </Text>
-      <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+      <Ionicons name="chevron-forward" size={18} color={c.textFaint} />
     </Pressable>
   );
 }
@@ -266,6 +274,8 @@ function WeekView({
   onOpen: (ev: EventItem) => void;
   onPickDay: (day: string) => void;
 }) {
+  const c = useC();
+  const styles = makeStyles(c);
   const days = weekDays(day); // 7 clés (lundi → dimanche)
   const today = todayKey();
 
@@ -298,6 +308,8 @@ function WeekDayBlock({
   onTitlePress: () => void;
   onOpen: (ev: EventItem) => void;
 }) {
+  const c = useC();
+  const styles = makeStyles(c);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [meditationSec, setMeditationSec] = useState(0);
   useEffect(() => {
@@ -322,18 +334,18 @@ function WeekDayBlock({
       ) : (
         events.map((ev) => (
           <Pressable key={ev.id} onPress={() => onOpen(ev)} style={styles.weekEventRow}>
-            <View style={[styles.weekDot, { backgroundColor: ev.color ?? colors.primary }]} />
+            <View style={[styles.weekDot, { backgroundColor: ev.color ?? c.primary }]} />
             <Text style={styles.weekEventTime}>{ev.start}</Text>
             <Text
               style={[
                 styles.weekEventTitle,
-                ev.done === 1 && { color: colors.textMuted, textDecorationLine: 'line-through' },
+                ev.done === 1 && { color: c.textMuted, textDecorationLine: 'line-through' },
               ]}
               numberOfLines={1}
             >
               {ev.title}
             </Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
+            <Ionicons name="chevron-forward" size={16} color={c.textFaint} />
           </Pressable>
         ))
       )}
@@ -359,6 +371,8 @@ function MonthView({
   const cells = monthGrid(day); // 42 clés (6 semaines)
   const today = todayKey();
   // Nombre d'événements par jour, pour afficher une pastille sous les jours pleins.
+  const c = useC();
+  const styles = makeStyles(c);
   const [counts, setCounts] = useState<Record<string, number>>({});
   useEffect(() => {
     setCounts(getEventCountsInRange(cells[0], cells[cells.length - 1]));
@@ -423,17 +437,21 @@ function NavArrow({
   icon: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
 }) {
+  const c = useC();
+  const styles = makeStyles(c);
   return (
     <Pressable onPress={onPress} hitSlop={12} style={styles.navArrow}>
-      <Ionicons name={icon} size={22} color={colors.aurora} />
+      <Ionicons name={icon} size={22} color={c.aurora} />
     </Pressable>
   );
 }
 
 function Empty({ text }: { text: string }) {
+  const c = useC();
+  const styles = makeStyles(c);
   return (
     <View style={styles.empty}>
-      <Ionicons name="calendar-clear-outline" size={52} color={colors.primary} />
+      <Ionicons name="calendar-clear-outline" size={52} color={c.primary} />
       <Text style={styles.emptyText}>{text}</Text>
     </View>
   );
@@ -445,7 +463,7 @@ function weekRangeLabel(day: string): string {
   return `${labelDayShort(days[0])} – ${labelDayShort(days[6])}`;
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
 
   navBar: {
@@ -459,16 +477,16 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: radius.pill,
-    backgroundColor: colors.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: colors.glassBorder,
+    borderColor: c.glassBorder,
     alignItems: 'center',
     justifyContent: 'center',
   },
   periodLabel: {
     fontSize: font.body,
     fontWeight: '700',
-    color: colors.text,
+    color: c.text,
     textTransform: 'capitalize',
   },
 
@@ -477,23 +495,23 @@ const styles = StyleSheet.create({
   eventRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: colors.glassBorder,
+    borderColor: c.glassBorder,
     borderRadius: radius.md,
     padding: spacing.md,
   },
   timeCol: { width: 52 },
-  timeStart: { fontSize: font.body, fontWeight: '700', color: colors.text },
-  timeEnd: { fontSize: font.small, color: colors.textMuted },
+  timeStart: { fontSize: font.body, fontWeight: '700', color: c.text },
+  timeEnd: { fontSize: font.small, color: c.textMuted },
   eventAccent: {
     width: 4,
     height: 36,
     borderRadius: radius.pill,
-    backgroundColor: colors.primary,
+    backgroundColor: c.primary,
     marginHorizontal: spacing.md,
   },
-  eventTitle: { flex: 1, fontSize: font.body, color: colors.text },
+  eventTitle: { flex: 1, fontSize: font.body, color: c.text },
   trash: { padding: spacing.xs },
   eventCheck: {
     width: 22, height: 22, borderRadius: 11, borderWidth: 2,
@@ -506,16 +524,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     alignSelf: 'flex-start',
-    backgroundColor: colors.primarySoft,
+    backgroundColor: c.primarySoft,
     borderWidth: 1,
-    borderColor: colors.glassBorder,
+    borderColor: c.glassBorder,
     borderRadius: radius.pill,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs + 2,
     marginBottom: spacing.xs,
   },
   medBadgeText: {
-    color: colors.aurora,
+    color: c.aurora,
     fontSize: font.small,
     fontWeight: '700',
   },
@@ -523,9 +541,9 @@ const styles = StyleSheet.create({
   // Vue semaine
   weekList: { padding: spacing.lg, gap: spacing.md, paddingBottom: 120 },
   weekBlock: {
-    backgroundColor: colors.surface,
+    backgroundColor: c.surface,
     borderWidth: 1,
-    borderColor: colors.glassBorder,
+    borderColor: c.glassBorder,
     borderRadius: radius.md,
     padding: spacing.md,
   },
@@ -538,22 +556,22 @@ const styles = StyleSheet.create({
   weekDayLabel: {
     fontSize: font.body,
     fontWeight: '700',
-    color: colors.text,
+    color: c.text,
     textTransform: 'capitalize',
   },
-  weekDayToday: { color: colors.primary },
+  weekDayToday: { color: c.primary },
   weekMed: {
     fontSize: font.small,
-    color: colors.primary,
+    color: c.primary,
     fontWeight: '600',
   },
   todayDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: colors.primary,
+    backgroundColor: c.primary,
   },
-  weekEmpty: { color: colors.textMuted, fontSize: font.small },
+  weekEmpty: { color: c.textMuted, fontSize: font.small },
   weekEventRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -564,10 +582,10 @@ const styles = StyleSheet.create({
   weekEventTime: {
     width: 44,
     fontSize: font.small,
-    color: colors.textMuted,
+    color: c.textMuted,
     fontWeight: '600',
   },
-  weekEventTitle: { flex: 1, fontSize: font.body, color: colors.text },
+  weekEventTitle: { flex: 1, fontSize: font.body, color: c.text },
 
   // Vue mois
   monthWrap: { paddingHorizontal: spacing.md },
@@ -576,7 +594,7 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'center',
     fontSize: font.small,
-    color: colors.textMuted,
+    color: c.textMuted,
     fontWeight: '600',
   },
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
@@ -587,7 +605,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: radius.sm,
   },
-  cellSelected: { backgroundColor: colors.primarySoft },
+  cellSelected: { backgroundColor: c.primarySoft },
   cellCircle: {
     width: 34,
     height: 34,
@@ -595,21 +613,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cellToday: { backgroundColor: colors.primary },
-  cellText: { fontSize: font.body, color: colors.text },
-  cellTextMuted: { color: colors.border },
-  cellTextToday: { color: colors.white, fontWeight: '700' },
+  cellToday: { backgroundColor: c.primary },
+  cellText: { fontSize: font.body, color: c.text },
+  cellTextMuted: { color: c.border },
+  cellTextToday: { color: c.white, fontWeight: '700' },
   cellDot: {
     position: 'absolute',
     bottom: 6,
     width: 5,
     height: 5,
     borderRadius: 3,
-    backgroundColor: colors.gold,
+    backgroundColor: c.gold,
   },
   monthHint: {
     textAlign: 'center',
-    color: colors.textMuted,
+    color: c.textMuted,
     fontSize: font.small,
     marginTop: spacing.md,
   },
@@ -624,20 +642,20 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: font.body,
-    color: colors.textMuted,
+    color: c.textMuted,
     textAlign: 'center',
   },
   fab: {
     position: 'absolute',
     right: spacing.lg,
-    bottom: spacing.lg,
+    bottom: spacing.lg + 64,
     width: 60,
     height: 60,
     borderRadius: radius.pill,
-    backgroundColor: colors.primary,
+    backgroundColor: c.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: colors.primaryDark,
+    shadowColor: c.primaryDark,
     shadowOpacity: 0.3,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },

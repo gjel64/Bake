@@ -39,7 +39,7 @@ import {
   todayKey,
   WEEKDAYS_SHORT,
 } from '@/lib/dates';
-import { colors, font, gradients, spacing } from '@/theme';
+import { font, gradients, spacing, useC, type Palette } from '@/theme';
 
 // --- Petits utilitaires de mise en forme ---------------------------------
 
@@ -139,6 +139,8 @@ function computeStats(): Stats {
 }
 
 export function StatsScreen() {
+  const c = useC();
+  const styles = makeStyles(c);
   const [s, setS] = useState<Stats | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -150,10 +152,10 @@ export function StatsScreen() {
       <SafeAreaView style={styles.container} edges={['bottom']}>
         <GradientHeader
           title="Statistiques"
-          subtitle="Ta constance, en un regard"
+          subtitle=""
           right={
             <Pressable onPress={() => setSettingsOpen(true)} hitSlop={10} style={styles.gear}>
-              <Ionicons name="settings-outline" size={22} color={colors.text} />
+              <Ionicons name="settings-outline" size={22} color={c.text} />
             </Pressable>
           }
         />
@@ -193,13 +195,13 @@ export function StatsScreen() {
               style={styles.tileRow}
             >
               <GlassCard glow style={styles.tile}>
-                <Ionicons name="flame" size={22} color={colors.amber} />
+                <Ionicons name="flame" size={22} color={c.amber} />
                 <AnimatedCount value={s.streak} style={styles.tileValue} />
                 <Text style={styles.tileLabel}>jours de suite</Text>
               </GlassCard>
 
               <GlassCard style={styles.tile}>
-                <Ionicons name="checkmark-done" size={22} color={colors.aurora} />
+                <Ionicons name="checkmark-done" size={22} color={c.aurora} />
                 <AnimatedCount value={s.totalCompletions} style={styles.tileValue} />
                 <Text style={styles.tileLabel}>validations</Text>
               </GlassCard>
@@ -209,7 +211,7 @@ export function StatsScreen() {
             <Animated.View entering={FadeInDown.delay(180).duration(500)}>
               <GlassCard style={styles.section}>
                 <View style={styles.sectionHead}>
-                  <Ionicons name="flower-outline" size={20} color={colors.aurora} />
+                  <Ionicons name="flower-outline" size={20} color={c.aurora} />
                   <Text style={styles.sectionTitle}>Méditation</Text>
                 </View>
 
@@ -237,10 +239,10 @@ export function StatsScreen() {
             <Animated.View entering={FadeInDown.delay(270).duration(500)}>
               <GlassCard style={styles.section}>
                 <View style={styles.sectionHead}>
-                  <Ionicons name="grid-outline" size={20} color={colors.aurora2} />
+                  <Ionicons name="grid-outline" size={20} color={c.aurora2} />
                   <Text style={styles.sectionTitle}>Activité · 5 semaines</Text>
                 </View>
-                <Heatmap weeks={s.heatWeeks} tint={colors.aurora} />
+                <Heatmap weeks={s.heatWeeks} tint={c.aurora} />
                 <Text style={styles.legend}>habitudes + méditation · moins → plus</Text>
               </GlassCard>
             </Animated.View>
@@ -253,6 +255,8 @@ export function StatsScreen() {
 
 /** Petite pastille « taux » sous l'anneau. */
 function RatePill({ label, value }: { label: string; value: number }) {
+  const c = useC();
+  const styles = makeStyles(c);
   return (
     <View style={styles.ratePill}>
       <Text style={styles.ratePillValue}>{Math.round(value * 100)}%</Text>
@@ -263,6 +267,8 @@ function RatePill({ label, value }: { label: string; value: number }) {
 
 /** Petite métrique (valeur + libellé). */
 function Meta({ label, value }: { label: string; value: string }) {
+  const c = useC();
+  const styles = makeStyles(c);
   return (
     <View style={styles.meta}>
       <Text style={styles.metaValue}>{value}</Text>
@@ -271,52 +277,52 @@ function Meta({ label, value }: { label: string; value: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   container: { flex: 1 },
   gear: {
     width: 40, height: 40, borderRadius: 999,
-    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.glassBorder,
+    backgroundColor: c.surface, borderWidth: 1, borderColor: c.glassBorder,
     alignItems: 'center', justifyContent: 'center',
   },
-  scroll: { padding: spacing.lg, gap: spacing.md, paddingBottom: spacing.xl * 2 },
+  scroll: { padding: spacing.lg, gap: spacing.md, paddingBottom: spacing.xl * 3 },
 
   // Hero
   hero: { alignItems: 'center', gap: spacing.lg },
-  ringPct: { fontSize: font.display, fontWeight: '300', color: colors.text },
-  ringCaption: { fontSize: font.small, color: colors.textMuted, marginTop: 2 },
+  ringPct: { fontSize: font.display, fontWeight: '300', color: c.text },
+  ringCaption: { fontSize: font.small, color: c.textMuted, marginTop: 2 },
   rateRow: { flexDirection: 'row', gap: spacing.xl },
   ratePill: { alignItems: 'center' },
-  ratePillValue: { fontSize: font.heading, fontWeight: '700', color: colors.aurora },
-  ratePillLabel: { fontSize: font.small, color: colors.textMuted },
+  ratePillValue: { fontSize: font.heading, fontWeight: '700', color: c.aurora },
+  ratePillLabel: { fontSize: font.small, color: c.textMuted },
 
   // Tuiles
   tileRow: { flexDirection: 'row', gap: spacing.md },
   tile: { flex: 1, alignItems: 'center', gap: spacing.xs },
-  tileValue: { fontSize: font.title, fontWeight: '800', color: colors.text },
-  tileLabel: { fontSize: font.small, color: colors.textMuted },
+  tileValue: { fontSize: font.title, fontWeight: '800', color: c.text },
+  tileLabel: { fontSize: font.small, color: c.textMuted },
 
   // Sections
   section: { gap: spacing.md },
   sectionHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  sectionTitle: { fontSize: font.heading, fontWeight: '700', color: colors.text },
-  bigValue: { fontSize: font.title, fontWeight: '800', color: colors.text },
-  bigCaption: { fontSize: font.small, color: colors.textMuted, marginTop: -spacing.sm },
+  sectionTitle: { fontSize: font.heading, fontWeight: '700', color: c.text },
+  bigValue: { fontSize: font.title, fontWeight: '800', color: c.text },
+  bigCaption: { fontSize: font.small, color: c.textMuted, marginTop: -spacing.sm },
 
   metaRow: { flexDirection: 'row', justifyContent: 'space-between' },
   meta: { alignItems: 'flex-start', gap: 2 },
-  metaValue: { fontSize: font.body, fontWeight: '700', color: colors.text },
-  metaLabel: { fontSize: font.tiny, color: colors.textMuted },
+  metaValue: { fontSize: font.body, fontWeight: '700', color: c.text },
+  metaLabel: { fontSize: font.tiny, color: c.textMuted },
 
   chartWrap: { marginTop: spacing.sm },
   chartCaption: {
     fontSize: font.tiny,
-    color: colors.textFaint,
+    color: c.textFaint,
     textAlign: 'center',
     marginTop: spacing.sm,
   },
   legend: {
     fontSize: font.tiny,
-    color: colors.textFaint,
+    color: c.textFaint,
     marginTop: spacing.sm,
   },
 });
