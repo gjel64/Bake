@@ -1,5 +1,6 @@
 /**
- * SettingsModal — les réglages : sauvegarde (export/import) et catégories.
+ * SettingsModal — les réglages : rappel quotidien des habitudes, sauvegarde
+ * (export/import) et catégories.
  *
  * Ouvert en plein écran depuis l'icône engrenage de l'écran Stats.
  */
@@ -12,16 +13,31 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 
 import { CategoryEditModal } from '@/components/CategoryEditModal';
 import { Category, deleteCategory, getCategories } from '@/db/database';
 import { exportToFile, importFromFile } from '@/lib/backup';
+import { getHabitsReminderTime, setHabitsReminderTime, syncHabitsReminder } from '@/lib/habitsReminder';
+import { toTimeKey } from '@/lib/dates';
 import { font, onSwatch, radius, spacing, useC, type Palette } from '@/theme';
+
+/** Heure proposée à la première activation du rappel. */
+const DEFAULT_REMINDER_TIME = '06:00';
+
+/** Convertit "HH:MM" en Date (aujourd'hui à cette heure), pour le sélecteur natif. */
+function timeToDate(time: string): Date {
+  const [h, m] = time.split(':').map(Number);
+  const d = new Date();
+  d.setHours(h, m, 0, 0);
+  return d;
+}
 
 export function SettingsModal({
   visible,
@@ -36,11 +52,40 @@ export function SettingsModal({
   const [editing, setEditing] = useState<Category | null>(null);
   const [catModal, setCatModal] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Rappel quotidien des habitudes : "HH:MM" ou null (désactivé).
+  const [reminder, setReminder] = useState<string | null>(null);
+  const [timePicker, setTimePicker] = useState(false);
 
-  const refresh = () => setCats(getCategories());
+  const refresh = () => {
+    setCats(getCategories());
+    setReminder(getHabitsReminderTime());
+  };
   useEffect(() => {
     if (visible) refresh();
   }, [visible]);
+
+  /** Active / coupe le rappel. À l'activation, heure de départ : 06:00. */
+  async function toggleReminder(on: boolean) {
+    const next = on ? DEFAULT_REMINDER_TIME : null;
+    setReminder(next); // retour immédiat, la programmation suit
+    const ok = await setHabitsReminderTime(next);
+    if (on && !ok) {
+      setReminder(null);
+      Alert.alert(
+        'Rappel impossible',
+        'Les notifications sont refusées ou indisponibles. Autorise-les pour Bake dans les réglages du téléphone.',
+      );
+    }
+  }
+
+  /** Nouvelle heure choisie dans le sélecteur natif. */
+  async function onPickTime(d: Date | undefined) {
+    setTimePicker(false);
+    if (!d) return;
+    const time = toTimeKey(d);
+    setReminder(time);
+    await setHabitsReminderTime(time);
+  }
 
   async function onExport() {
     try {
@@ -68,6 +113,9 @@ export function SettingsModal({
               setBusy(true);
               const ok = await importFromFile();
               if (ok) {
+                // La sauvegarde a rapporté un id de notification périmé :
+                // on reprogramme le rappel d'après l'heure restaurée.
+                await syncHabitsReminder();
                 refresh();
                 Alert.alert('Import réussi', 'Tes données ont été restaurées.');
               }
@@ -108,6 +156,33 @@ export function SettingsModal({
           </View>
 
           <ScrollView contentContainerStyle={styles.body}>
+            {/* Rappel quotidien des habitudes */}
+            <Text style={styles.section}>RAPPEL DES HABITUDES</Text>
+            <Text style={styles.hint}>
+              Une notification chaque jour à l’heure de ton choix, pour penser à
+              valider tes habitudes. (Elle sonne même si tout est déjà validé.)
+            </Text>
+            <View style={styles.remindRow}>
+              <View style={styles.remindLeft}>
+                <Ionicons name="notifications-outline" size={20} color={c.aurora} />
+                <Text style={styles.remindLabel}>Rappel quotidien</Text>
+              </View>
+              <Switch
+                value={reminder !== null}
+                onValueChange={toggleReminder}
+                trackColor={{ true: c.primary, false: c.surfaceStrong }}
+                thumbColor={c.white}
+              />
+            </View>
+            {reminder !== null && (
+              <Pressable onPress={() => setTimePicker(true)} style={styles.remindTime}>
+                <Ionicons name="time-outline" size={18} color={c.primary} />
+                <Text style={styles.remindTimeLabel}>Tous les jours à</Text>
+                <Text style={styles.remindTimeValue}>{reminder}</Text>
+                <Ionicons name="chevron-forward" size={18} color={c.textMuted} />
+              </Pressable>
+            )}
+
             {/* Sauvegarde */}
             <Text style={styles.section}>SAUVEGARDE</Text>
             <Text style={styles.hint}>
@@ -164,6 +239,15 @@ export function SettingsModal({
           </View>
         )}
 
+        {timePicker && (
+          <DateTimePicker
+            value={timeToDate(reminder ?? DEFAULT_REMINDER_TIME)}
+            mode="time"
+            is24Hour
+            onChange={(_e, d) => onPickTime(d)}
+          />
+        )}
+
         <CategoryEditModal
           visible={catModal}
           category={editing}
@@ -210,6 +294,20 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.lg },
   hint: { fontSize: font.small, color: c.textMuted, marginBottom: spacing.sm, lineHeight: 19 },
   cardRow: { flexDirection: 'row', gap: spacing.md },
+  remindRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: c.surface, borderWidth: 1, borderColor: c.glassBorder,
+    borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+  },
+  remindLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  remindLabel: { fontSize: font.body, color: c.text, fontWeight: '600' },
+  remindTime: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    backgroundColor: c.surface, borderWidth: 1, borderColor: c.glassBorder,
+    borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 4,
+  },
+  remindTimeLabel: { flex: 1, fontSize: font.body, color: c.textMuted },
+  remindTimeValue: { fontSize: font.body, color: c.text, fontWeight: '700' },
   bigBtn: {
     flex: 1, alignItems: 'center', gap: spacing.xs,
     backgroundColor: c.surface, borderWidth: 1, borderColor: c.glassBorder,

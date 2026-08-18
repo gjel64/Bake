@@ -1,7 +1,8 @@
 /**
  * App.tsx — le composant racine (V3, look iOS).
  *
- * Initialise la base + les notifications, puis pose une tab bar FLOTTANTE
+ * Initialise la base, les notifications et le rappel quotidien des habitudes,
+ * puis pose une tab bar FLOTTANTE
  * arrondie (détachée du bord, icônes seules, tap uniquement). Le thème
  * (clair / sombre) suit le système via `useColorScheme`.
  */
@@ -26,6 +27,7 @@ import { ScheduleScreen } from '@/screens/ScheduleScreen';
 import { StatsScreen } from '@/screens/StatsScreen';
 import { initDatabase } from '@/db/database';
 import { initNotifications } from '@/lib/notifications';
+import { syncHabitsReminder } from '@/lib/habitsReminder';
 import { darkColors, lightColors } from '@/theme';
 
 /** Icônes d'onglet : pleine si actif, contour sinon (convention iOS). */
@@ -46,7 +48,9 @@ const Tab = createBottomTabNavigator();
 export default function App(): React.JSX.Element {
   useEffect(() => {
     initDatabase();
-    initNotifications();
+    // Canaux + permission d'abord, puis on remet le rappel quotidien des
+    // habitudes en place (réinstallation, restauration de sauvegarde…).
+    initNotifications().then(syncHabitsReminder);
   }, []);
 
   return (

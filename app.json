@@ -2,13 +2,16 @@
   "expo": {
     "name": "Bake",
     "slug": "bake",
-    "version": "2.0.0",
+    "version": "3.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "dark",
-    "backgroundColor": "#0A100D",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#F2F2F7",
     "splash": {
-      "backgroundColor": "#0A100D",
-      "resizeMode": "contain"
+      "backgroundColor": "#F2F2F7",
+      "resizeMode": "contain",
+      "dark": {
+        "backgroundColor": "#000000"
+      }
     },
     "assetBundlePatterns": [
       "**/*"

@@ -1,10 +1,10 @@
 /**
- * TodoScreen — la liste de tâches, regroupée par catégorie.
+ * TodoScreen — la liste de tâches, regroupée par priorité ou par catégorie.
  *
- * En haut, les tâches « à faire » groupées par catégorie (+ un groupe « Sans
- * catégorie »). En bas, une section « Terminé » repliable (tâches barrées).
+ * En haut, les tâches « à faire » groupées par PRIORITÉ (vue par défaut) ou par
+ * catégorie. En bas, une section « Terminé » repliable (tâches barrées).
  * Un appui sur une tâche l'édite ; la case à cocher la termine ; l'icône
- * calendrier la planifie dans l'agenda (elle y apparaît, liée).
+ * calendrier la planifie dans l'agenda — ou rouvre l'événement déjà lié.
  */
 
 import { useCallback, useMemo, useState } from 'react';
@@ -29,8 +29,10 @@ import { AddEventModal } from '@/components/AddEventModal';
 import { PRIORITY_META } from '@/components/PriorityPicker';
 import {
   Category,
+  EventItem,
   Todo,
   getCategories,
+  getLinkedEvents,
   getTodos,
   toggleTodoDone,
 } from '@/db/database';
@@ -41,7 +43,8 @@ if (Platform.OS === 'android') {
   UIManager.setLayoutAnimationEnabledExperimental?.(true);
 }
 
-const GROUP_MODES = ['Catégorie', 'Priorité'] as const;
+// L'ordre compte : le premier est le mode par défaut (et s'affiche en premier).
+const GROUP_MODES = ['Priorité', 'Catégorie'] as const;
 type GroupMode = (typeof GROUP_MODES)[number];
 
 export function TodoScreen() {
@@ -52,8 +55,9 @@ export function TodoScreen() {
   const [editing, setEditing] = useState<Todo | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [scheduling, setScheduling] = useState<Todo | null>(null);
+  const [linkedEvent, setLinkedEvent] = useState<EventItem | null>(null);
   const [doneOpen, setDoneOpen] = useState(false);
-  const [groupMode, setGroupMode] = useState<GroupMode>('Catégorie');
+  const [groupMode, setGroupMode] = useState<GroupMode>(GROUP_MODES[0]);
 
   const refresh = useCallback(() => {
     setTodos(getTodos());
@@ -104,6 +108,27 @@ export function TodoScreen() {
     setModalOpen(true);
   }
 
+  /**
+   * Icône calendrier : ouvre l'événement déjà lié s'il y en a un (pour le
+   * déplacer, y ajouter d'autres tâches ou le supprimer), sinon en crée un.
+   */
+  function openSchedule(t: Todo) {
+    const [existing] = getLinkedEvents(t.id);
+    if (existing) setLinkedEvent(existing);
+    else setScheduling(t);
+  }
+
+  function closeSchedule() {
+    setScheduling(null);
+    setLinkedEvent(null);
+  }
+
+  // Identité stable : ce tableau part en dépendance d'un effet dans la modale.
+  const presetTodoIds = useMemo(
+    () => (scheduling ? [scheduling.id] : []),
+    [scheduling],
+  );
+
   return (
     <ScreenBackground>
       <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -144,7 +169,7 @@ export function TodoScreen() {
                   todo={t}
                   onToggle={() => toggle(t)}
                   onEdit={() => openEdit(t)}
-                  onSchedule={() => setScheduling(t)}
+                  onSchedule={() => openSchedule(t)}
                 />
               ))}
             </View>
@@ -171,7 +196,7 @@ export function TodoScreen() {
                     todo={t}
                     onToggle={() => toggle(t)}
                     onEdit={() => openEdit(t)}
-                    onSchedule={() => setScheduling(t)}
+                    onSchedule={() => openSchedule(t)}
                   />
                 ))}
             </View>
@@ -192,14 +217,15 @@ export function TodoScreen() {
           onSaved={refresh}
         />
 
-        {/* Planifier un to-do dans l'agenda (événement lié) */}
+        {/* Planifier un to-do dans l'agenda — ou rouvrir l'événement lié */}
         <AddEventModal
-          visible={scheduling !== null}
+          visible={scheduling !== null || linkedEvent !== null}
           defaultDay={todayKey()}
+          event={linkedEvent}
           presetTitle={scheduling?.title}
-          presetTodoId={scheduling?.id ?? null}
+          presetTodoIds={presetTodoIds}
           presetCategoryId={scheduling?.category_id ?? null}
-          onClose={() => setScheduling(null)}
+          onClose={closeSchedule}
           onSaved={refresh}
         />
       </SafeAreaView>
@@ -250,14 +276,14 @@ function TodoRow({
       {/* Priorité */}
       {!done && <View style={[styles.prioDot, { backgroundColor: prio.color }]} />}
 
-      {/* Planifié / planifier */}
-      {todo.scheduled === 1 ? (
-        <Ionicons name="calendar" size={18} color={c.aurora} style={styles.calIcon} />
-      ) : (
-        <Pressable onPress={onSchedule} hitSlop={8} style={styles.calBtn}>
-          <Ionicons name="calendar-outline" size={18} color={c.textMuted} />
-        </Pressable>
-      )}
+      {/* Planifié / planifier — dans les deux cas, on peut ouvrir l'agenda */}
+      <Pressable onPress={onSchedule} hitSlop={8} style={styles.calBtn}>
+        <Ionicons
+          name={todo.scheduled === 1 ? 'calendar' : 'calendar-outline'}
+          size={18}
+          color={todo.scheduled === 1 ? c.aurora : c.textMuted}
+        />
+      </Pressable>
     </Pressable>
   );
 }
@@ -312,7 +338,6 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   remindTag: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
   remindText: { fontSize: font.tiny, color: c.aurora },
   prioDot: { width: 10, height: 10, borderRadius: 5 },
-  calIcon: { marginLeft: 2 },
   calBtn: { padding: 2 },
 
   empty: { alignItems: 'center', gap: spacing.md, paddingTop: spacing.xl * 2, paddingHorizontal: spacing.xl },

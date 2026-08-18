@@ -2,8 +2,11 @@
  * CategoryPicker — rangée de puces pour choisir une catégorie (thémé).
  *
  * Puce non sélectionnée : fond discret + libellé neutre. Puce sélectionnée :
- * remplie de la couleur de la catégorie (texte/icône sombre, lisible). Un
- * bouton « + Catégorie » ouvre la création.
+ * remplie de la couleur de la catégorie (texte/icône sombre, lisible).
+ *
+ * Un bouton « + Catégorie » ouvre la création ; un APPUI LONG sur une puce
+ * ouvre sa modification (nom, couleur, icône, suppression) — même écran que
+ * dans les Réglages, mais accessible là où on choisit les catégories.
  */
 
 import { useEffect, useState } from 'react';
@@ -21,10 +24,22 @@ type Props = {
 export function CategoryPicker({ value, onChange }: Props) {
   const c = useC();
   const [cats, setCats] = useState<Category[]>([]);
-  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Category | null>(null); // null + open = création
+  const [open, setOpen] = useState(false);
 
   const refresh = () => setCats(getCategories());
   useEffect(() => refresh(), []);
+
+  /** Après création : on sélectionne la nouvelle catégorie. Après édition : rien. */
+  function onSaved() {
+    const before = new Set(cats.map((x) => x.id));
+    const next = getCategories();
+    setCats(next);
+    if (editing === null) {
+      const created = next.find((x) => !before.has(x.id));
+      if (created) onChange(created.id);
+    }
+  }
 
   return (
     <View>
@@ -38,10 +53,17 @@ export function CategoryPicker({ value, onChange }: Props) {
             fill={cat.color}
             icon={cat.icon as keyof typeof Ionicons.glyphMap}
             onPress={() => onChange(cat.id)}
+            onLongPress={() => {
+              setEditing(cat);
+              setOpen(true);
+            }}
           />
         ))}
         <Pressable
-          onPress={() => setCreating(true)}
+          onPress={() => {
+            setEditing(null);
+            setOpen(true);
+          }}
           style={[styles.addChip, { backgroundColor: c.surfaceAlt }]}
         >
           <Ionicons name="add" size={16} color={c.primary} />
@@ -49,16 +71,17 @@ export function CategoryPicker({ value, onChange }: Props) {
         </Pressable>
       </ScrollView>
 
+      <Text style={[styles.hint, { color: c.textFaint }]}>
+        Appui long sur une catégorie pour la modifier
+      </Text>
+
       <CategoryEditModal
-        visible={creating}
-        category={null}
-        onClose={() => setCreating(false)}
-        onSaved={() => {
-          const before = new Set(cats.map((x) => x.id));
-          const next = getCategories();
-          setCats(next);
-          const created = next.find((x) => !before.has(x.id));
-          if (created) onChange(created.id);
+        visible={open}
+        category={editing}
+        onClose={() => setOpen(false)}
+        onSaved={onSaved}
+        onDeleted={(id) => {
+          if (value === id) onChange(null); // la sélection n'existe plus
         }}
       />
     </View>
@@ -71,17 +94,20 @@ function Chip({
   fill,
   icon,
   onPress,
+  onLongPress,
 }: {
   active: boolean;
   label: string;
   fill: string; // couleur de remplissage quand sélectionnée
   icon?: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
+  onLongPress?: () => void;
 }) {
   const c = useC();
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onLongPress}
       style={[
         styles.chip,
         active ? { backgroundColor: fill } : { backgroundColor: c.surfaceAlt },
@@ -113,4 +139,5 @@ const styles = StyleSheet.create({
     height: 36,
   },
   addText: { fontSize: font.small, fontWeight: '600' },
+  hint: { fontSize: font.tiny, marginTop: 4 },
 });

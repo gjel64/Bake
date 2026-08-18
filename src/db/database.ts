@@ -12,7 +12,19 @@
  * Schéma :
  *   habits(id, name, description, color, created_at)
  *   completions(id, habit_id, day)   -- une ligne = « habit validé ce jour-là »
- *   events(id, title, day, start, end)
+ *   events(id, title, day, end_day, start, end, category_id, todo_id*)
+ *   event_todos(event_id, todo_id)   -- lien N..N entre événements et to-dos
+ *   settings(key, value)             -- réglages de l'app (clé → valeur texte)
+ *
+ *   `events.day` et `events.end_day` bornent la PLAGE de jours d'un événement
+ *   (end_day = day pour un événement d'une seule journée). `start` est l'heure
+ *   du premier jour, `end` celle du dernier ; les jours intermédiaires d'un
+ *   événement long comptent comme des journées entières.
+ *
+ *   (*) events.todo_id est un vestige de la V2 (un seul to-do par événement).
+ *   Il est vidé au démarrage par `migrateEventTodoLinks()` au profit de la
+ *   table `event_todos`. On ne le supprime pas : les bases déjà installées et
+ *   les vieilles sauvegardes le contiennent encore.
  */
 
 import * as SQLite from 'expo-sqlite';
@@ -34,13 +46,15 @@ export type Habit = {
 export type EventItem = {
   id: number;
   title: string;
-  day: string; // "YYYY-MM-DD"
-  start: string; // "HH:MM"
-  end: string; // "HH:MM"
+  day: string; // premier jour, "YYYY-MM-DD"
+  end_day: string; // dernier jour, "YYYY-MM-DD" (= day si l'événement tient sur un jour)
+  start: string; // "HH:MM" — heure de début, le premier jour
+  end: string; // "HH:MM" — heure de fin, le dernier jour
   category_id: number | null;
-  todo_id: number | null; // si l'événement provient d'un to-do (lien)
   color: string | null; // couleur de la catégorie (jointure, pour l'affichage)
-  done: number; // 0/1 — pour un événement lié, reflète l'état du to-do
+  todo_ids: number[]; // to-dos liés à cet événement (0, 1 ou plusieurs)
+  todo_done: number; // combien de ces to-dos sont cochés
+  done: number; // 1 si l'événement a des to-dos liés et qu'ils sont TOUS faits
 };
 
 /** Une catégorie (partagée entre to-dos et événements). */
@@ -144,11 +158,29 @@ export function initDatabase(): void {
       created_at  TEXT NOT NULL,
       position    INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS event_todos (
+      event_id INTEGER NOT NULL,
+      todo_id  INTEGER NOT NULL,
+      PRIMARY KEY (event_id, todo_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   // Migration douce : ajoute les colonnes manquantes à `events` (V1 → V2).
   ensureColumn('events', 'category_id', 'category_id INTEGER');
   ensureColumn('events', 'todo_id', 'todo_id INTEGER');
+
+  // V3 → V4 : un événement porte une plage de jours (day → end_day).
+  ensureColumn('events', 'end_day', 'end_day TEXT');
+
+  // V2 → V3 : le lien unique events.todo_id devient la table event_todos.
+  migrateEventTodoLinks();
+  migrateEventEndDay();
 
   // Amorce les catégories par défaut si la table est vide.
   const count = db.getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM categories');
@@ -171,6 +203,41 @@ function ensureColumn(table: string, column: string, ddl: string): void {
   if (!cols.some((c) => c.name === column)) {
     db.execSync(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   }
+}
+
+/**
+ * Reporte les anciens liens `events.todo_id` (un seul to-do par événement)
+ * dans `event_todos`, puis VIDE la colonne. Ce vidage est ce qui rend la
+ * migration idempotente : sans lui, un lien supprimé par l'utilisateur serait
+ * ressuscité au démarrage suivant. Sert aussi après l'import d'une vieille
+ * sauvegarde.
+ */
+function migrateEventTodoLinks(): void {
+  const legacy = db.getAllSync<{ id: number; todo_id: number }>(
+    'SELECT id, todo_id FROM events WHERE todo_id IS NOT NULL',
+  );
+  if (legacy.length === 0) return;
+
+  db.withTransactionSync(() => {
+    for (const row of legacy) {
+      db.runSync(
+        'INSERT OR IGNORE INTO event_todos (event_id, todo_id) VALUES (?, ?)',
+        row.id,
+        row.todo_id,
+      );
+    }
+    db.runSync('UPDATE events SET todo_id = NULL');
+  });
+}
+
+/**
+ * Donne une date de fin aux événements qui n'en ont pas (créés avant la V4) :
+ * ils tiennent sur une seule journée, donc `end_day = day`. Idempotente : ne
+ * touche que les lignes encore à NULL. Sert aussi après l'import d'une vieille
+ * sauvegarde.
+ */
+function migrateEventEndDay(): void {
+  db.runSync('UPDATE events SET end_day = day WHERE end_day IS NULL');
 }
 
 // ===========================================================================
@@ -253,92 +320,176 @@ export function daysUntilCanAddHabit(): number {
 //  EVENTS (agenda)
 // ===========================================================================
 
-// Sélection commune : on joint la catégorie (couleur) et le to-do lié (état fait).
+/**
+ * Sélection commune : on joint la catégorie (couleur) et on agrège les to-dos
+ * liés — leurs ids (chaîne "3,7,12") et le nombre d'entre eux déjà cochés.
+ * `end_day` est normalisé : jamais NULL, même pour une ligne d'avant la V4.
+ */
 const EVENT_SELECT = `
-  SELECT e.id, e.title, e.day, e.start, e.end, e.category_id, e.todo_id,
-         c.color AS color, COALESCE(t.done, 0) AS done
+  SELECT e.id, e.title, e.day, COALESCE(e.end_day, e.day) AS end_day,
+         e.start, e.end, e.category_id,
+         c.color AS color,
+         (SELECT group_concat(et.todo_id)
+            FROM event_todos et WHERE et.event_id = e.id) AS todo_ids_csv,
+         (SELECT COUNT(*)
+            FROM event_todos et
+            JOIN todos t ON t.id = et.todo_id
+           WHERE et.event_id = e.id AND t.done = 1) AS todo_done
   FROM events e
   LEFT JOIN categories c ON c.id = e.category_id
-  LEFT JOIN todos t ON t.id = e.todo_id
 `;
 
-/** Les événements d'un jour donné, triés par heure de début. */
-export function getEventsForDay(day: string): EventItem[] {
-  return db.getAllSync<EventItem>(
-    `${EVENT_SELECT} WHERE e.day = ? ORDER BY e.start ASC`,
-    day,
-  );
+/** La ligne brute renvoyée par EVENT_SELECT (avant mise en forme). */
+type EventRow = Omit<EventItem, 'todo_ids' | 'done'> & { todo_ids_csv: string | null };
+
+/** Met une ligne brute en forme : ids en tableau, `done` calculé. */
+function mapEvent(row: EventRow): EventItem {
+  const ids = row.todo_ids_csv
+    ? row.todo_ids_csv.split(',').map(Number).filter((n) => !Number.isNaN(n))
+    : [];
+  const { todo_ids_csv, ...rest } = row;
+  return {
+    ...rest,
+    todo_ids: ids,
+    // Un événement n'est « fait » que s'il a des to-dos liés et qu'ils le sont tous.
+    done: ids.length > 0 && row.todo_done === ids.length ? 1 : 0,
+  };
 }
 
-/** Les événements d'une plage de jours (bornes incluses), pour la vue semaine. */
+/**
+ * Les événements qui COUVRENT un jour donné, triés par heure de début.
+ * Un événement sur plusieurs jours ressort donc chaque jour de sa plage ; les
+ * jours où il ne fait que courir sont triés comme s'ils commençaient à minuit.
+ */
+export function getEventsForDay(day: string): EventItem[] {
+  return db
+    .getAllSync<EventRow>(
+      `${EVENT_SELECT} WHERE ? BETWEEN e.day AND COALESCE(e.end_day, e.day)
+       ORDER BY CASE WHEN e.day = ? THEN e.start ELSE '00:00' END ASC, e.id ASC`,
+      day,
+      day,
+    )
+    .map(mapEvent);
+}
+
+/**
+ * Les événements qui CHEVAUCHENT une plage de jours (bornes incluses).
+ * Un événement long est renvoyé une seule fois, même s'il déborde des bornes.
+ */
 export function getEventsInRange(startDay: string, endDay: string): EventItem[] {
-  return db.getAllSync<EventItem>(
-    `${EVENT_SELECT} WHERE e.day BETWEEN ? AND ? ORDER BY e.day ASC, e.start ASC`,
-    startDay,
-    endDay,
-  );
+  return db
+    .getAllSync<EventRow>(
+      `${EVENT_SELECT} WHERE e.day <= ? AND COALESCE(e.end_day, e.day) >= ?
+       ORDER BY e.day ASC, e.start ASC`,
+      endDay,
+      startDay,
+    )
+    .map(mapEvent);
 }
 
 /** Le nombre d'événements par jour sur une plage : { "2026-07-06": 2, … }.
- *  Sert à afficher une pastille sous les jours occupés dans la vue mois. */
+ *  Sert à afficher une pastille sous les jours occupés dans la vue mois.
+ *  Un événement sur plusieurs jours compte pour CHAQUE jour qu'il couvre :
+ *  impossible à faire en SQL simple, on déplie donc la plage en JS. */
 export function getEventCountsInRange(
   startDay: string,
   endDay: string,
 ): Record<string, number> {
-  const rows = db.getAllSync<{ day: string; n: number }>(
-    'SELECT day, COUNT(*) AS n FROM events WHERE day BETWEEN ? AND ? GROUP BY day',
-    startDay,
+  const rows = db.getAllSync<{ day: string; end_day: string }>(
+    `SELECT day, COALESCE(end_day, day) AS end_day FROM events
+     WHERE day <= ? AND COALESCE(end_day, day) >= ?`,
     endDay,
+    startDay,
   );
   const map: Record<string, number> = {};
-  for (const r of rows) map[r.day] = r.n;
+  for (const r of rows) {
+    // On borne la plage de l'événement à celle demandée avant de la déplier.
+    let d = r.day < startDay ? startDay : r.day;
+    const last = r.end_day > endDay ? endDay : r.end_day;
+    while (d <= last) {
+      map[d] = (map[d] ?? 0) + 1;
+      d = addDays(d, 1);
+    }
+  }
   return map;
 }
 
-/** Ajoute un événement à l'agenda. Renvoie son id (utile pour lier un to-do). */
+/**
+ * Ajoute un événement à l'agenda, avec ses to-dos liés. Renvoie son id.
+ * `endDay` est le dernier jour de l'événement (= `day` s'il tient sur un jour) ;
+ * une valeur antérieure à `day` est ramenée à `day`.
+ */
 export function addEvent(
   title: string,
   day: string,
+  endDay: string,
   start: string,
   end: string,
   categoryId: number | null = null,
-  todoId: number | null = null,
+  todoIds: number[] = [],
 ): number {
-  const res = db.runSync(
-    'INSERT INTO events (title, day, start, end, category_id, todo_id) VALUES (?, ?, ?, ?, ?, ?)',
-    title.trim(),
-    day,
-    start,
-    end,
-    categoryId,
-    todoId,
-  );
-  return res.lastInsertRowId;
+  let id = 0;
+  db.withTransactionSync(() => {
+    const res = db.runSync(
+      'INSERT INTO events (title, day, end_day, start, end, category_id) VALUES (?, ?, ?, ?, ?, ?)',
+      title.trim(),
+      day,
+      endDay < day ? day : endDay,
+      start,
+      end,
+      categoryId,
+    );
+    id = res.lastInsertRowId;
+    linkTodos(id, todoIds);
+  });
+  return id;
 }
 
-/** Modifie un événement existant (titre, date, horaires, catégorie). */
+/** Modifie un événement existant (titre, plage de jours, horaires, catégorie, to-dos liés). */
 export function updateEvent(
   id: number,
   title: string,
   day: string,
+  endDay: string,
   start: string,
   end: string,
   categoryId: number | null,
+  todoIds: number[] = [],
 ): void {
-  db.runSync(
-    'UPDATE events SET title = ?, day = ?, start = ?, end = ?, category_id = ? WHERE id = ?',
-    title.trim(),
-    day,
-    start,
-    end,
-    categoryId,
-    id,
-  );
+  db.withTransactionSync(() => {
+    db.runSync(
+      `UPDATE events SET title = ?, day = ?, end_day = ?, start = ?, end = ?, category_id = ?
+       WHERE id = ?`,
+      title.trim(),
+      day,
+      endDay < day ? day : endDay,
+      start,
+      end,
+      categoryId,
+      id,
+    );
+    db.runSync('DELETE FROM event_todos WHERE event_id = ?', id);
+    linkTodos(id, todoIds);
+  });
 }
 
-/** Supprime un événement par son id (le to-do lié, lui, reste dans la liste). */
+/** Remplace la liste des to-dos liés à un événement (appelé sous transaction). */
+function linkTodos(eventId: number, todoIds: number[]): void {
+  for (const todoId of todoIds) {
+    db.runSync(
+      'INSERT OR IGNORE INTO event_todos (event_id, todo_id) VALUES (?, ?)',
+      eventId,
+      todoId,
+    );
+  }
+}
+
+/** Supprime un événement (les to-dos liés, eux, restent dans la liste). */
 export function deleteEvent(id: number): void {
-  db.runSync('DELETE FROM events WHERE id = ?', id);
+  db.withTransactionSync(() => {
+    db.runSync('DELETE FROM event_todos WHERE event_id = ?', id);
+    db.runSync('DELETE FROM events WHERE id = ?', id);
+  });
 }
 
 // ===========================================================================
@@ -516,7 +667,7 @@ export function deleteCategory(id: number): void {
 // Sélection commune : joint la catégorie + indique si un événement est lié.
 const TODO_SELECT = `
   SELECT t.*, c.name AS cat_name, c.color AS cat_color, c.icon AS cat_icon,
-         EXISTS(SELECT 1 FROM events e WHERE e.todo_id = t.id) AS scheduled
+         EXISTS(SELECT 1 FROM event_todos et WHERE et.todo_id = t.id) AS scheduled
   FROM todos t
   LEFT JOIN categories c ON c.id = t.category_id
 `;
@@ -592,33 +743,114 @@ export function toggleTodoDone(id: number): boolean {
   return next === 1;
 }
 
-/** Supprime un to-do (et son éventuel événement lié dans l'agenda). */
+/** Coche (ou décoche) plusieurs to-dos d'un coup — depuis un événement lié. */
+export function setTodosDone(ids: number[], done: boolean): void {
+  if (ids.length === 0) return;
+  db.withTransactionSync(() => {
+    for (const id of ids) {
+      db.runSync(
+        'UPDATE todos SET done = ?, done_at = ? WHERE id = ?',
+        done ? 1 : 0,
+        done ? todayKey() : null,
+        id,
+      );
+    }
+  });
+}
+
+/**
+ * Supprime un to-do. Ses liens disparaissent ; un événement qui se retrouve
+ * SANS aucun to-do lié est supprimé lui aussi (c'était une tâche planifiée,
+ * elle n'a plus de raison d'être). Les événements qui gardent d'autres to-dos
+ * restent en place.
+ */
 export function deleteTodo(id: number): void {
   db.withTransactionSync(() => {
-    db.runSync('DELETE FROM events WHERE todo_id = ?', id);
+    const linked = db.getAllSync<{ event_id: number }>(
+      'SELECT event_id FROM event_todos WHERE todo_id = ?',
+      id,
+    );
+    db.runSync('DELETE FROM event_todos WHERE todo_id = ?', id);
+    for (const { event_id } of linked) {
+      const rest = db.getFirstSync<{ n: number }>(
+        'SELECT COUNT(*) AS n FROM event_todos WHERE event_id = ?',
+        event_id,
+      );
+      if ((rest?.n ?? 0) === 0) db.runSync('DELETE FROM events WHERE id = ?', event_id);
+    }
     db.runSync('DELETE FROM todos WHERE id = ?', id);
   });
 }
 
-/** L'événement lié à un to-do, s'il existe (pour l'édition/déplanification). */
-export function getLinkedEvent(todoId: number): EventItem | null {
-  return db.getFirstSync<EventItem>(
-    `${EVENT_SELECT} WHERE e.todo_id = ?`,
-    todoId,
-  );
+/** Les événements auxquels un to-do est rattaché (souvent zéro ou un). */
+export function getLinkedEvents(todoId: number): EventItem[] {
+  return db
+    .getAllSync<EventRow>(
+      `${EVENT_SELECT} WHERE EXISTS(
+         SELECT 1 FROM event_todos et WHERE et.event_id = e.id AND et.todo_id = ?
+       ) ORDER BY e.day ASC, e.start ASC`,
+      todoId,
+    )
+    .map(mapEvent);
 }
 
-/** Enlève la planification d'un to-do (supprime l'événement lié). */
+/**
+ * Déplanifie un to-do : on retire ses liens, et on supprime les événements qui
+ * n'ont plus aucun to-do rattaché (même règle que `deleteTodo`).
+ */
 export function unscheduleTodo(todoId: number): void {
-  db.runSync('DELETE FROM events WHERE todo_id = ?', todoId);
+  db.withTransactionSync(() => {
+    const linked = db.getAllSync<{ event_id: number }>(
+      'SELECT event_id FROM event_todos WHERE todo_id = ?',
+      todoId,
+    );
+    db.runSync('DELETE FROM event_todos WHERE todo_id = ?', todoId);
+    for (const { event_id } of linked) {
+      const rest = db.getFirstSync<{ n: number }>(
+        'SELECT COUNT(*) AS n FROM event_todos WHERE event_id = ?',
+        event_id,
+      );
+      if ((rest?.n ?? 0) === 0) db.runSync('DELETE FROM events WHERE id = ?', event_id);
+    }
+  });
+}
+
+// ===========================================================================
+//  RÉGLAGES (petites préférences, une ligne par clé)
+// ===========================================================================
+
+/** Heure du rappel quotidien des habitudes, "HH:MM" (absent = désactivé). */
+export const SETTING_HABITS_REMINDER_TIME = 'habits_reminder_time';
+
+/** Lit un réglage, ou null s'il n'a jamais été posé. */
+export function getSetting(key: string): string | null {
+  const row = db.getFirstSync<{ value: string }>(
+    'SELECT value FROM settings WHERE key = ?',
+    key,
+  );
+  return row?.value ?? null;
+}
+
+/** Écrit un réglage. Passer `null` l'efface. */
+export function setSetting(key: string, value: string | null): void {
+  if (value === null) {
+    db.runSync('DELETE FROM settings WHERE key = ?', key);
+    return;
+  }
+  db.runSync(
+    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?',
+    key,
+    value,
+    value,
+  );
 }
 
 // ===========================================================================
 //  EXPORT / IMPORT (sauvegarde anti-réinstallation)
 // ===========================================================================
 
-/** Version du format d'export (pour compatibilité future). */
-export const BACKUP_VERSION = 2;
+/** Version du format d'export (4 = événements sur plusieurs jours + réglages). */
+export const BACKUP_VERSION = 4;
 
 type Backup = {
   version: number;
@@ -629,6 +861,8 @@ type Backup = {
   meditations: unknown[];
   categories: unknown[];
   todos: unknown[];
+  event_todos?: unknown[]; // absent des sauvegardes v1/v2
+  settings?: unknown[]; // absent des sauvegardes v1/v2/v3
 };
 
 /** Rassemble TOUTES les données brutes dans un objet sérialisable (JSON). */
@@ -643,6 +877,8 @@ export function exportData(): Backup {
     meditations: dump('meditations'),
     categories: dump('categories'),
     todos: dump('todos'),
+    event_todos: dump('event_todos'),
+    settings: dump('settings'),
   };
 }
 
@@ -665,14 +901,24 @@ function restoreTable(table: string, rows: unknown[]): void {
  */
 export function importData(backup: Backup): void {
   db.withTransactionSync(() => {
-    for (const t of ['habits', 'completions', 'events', 'meditations', 'categories', 'todos']) {
-      db.runSync(`DELETE FROM ${t}`);
-    }
+    const tables = [
+      'habits', 'completions', 'events', 'meditations',
+      'categories', 'todos', 'event_todos', 'settings',
+    ];
+    for (const t of tables) db.runSync(`DELETE FROM ${t}`);
+
     restoreTable('habits', backup.habits ?? []);
     restoreTable('completions', backup.completions ?? []);
     restoreTable('events', backup.events ?? []);
     restoreTable('meditations', backup.meditations ?? []);
     restoreTable('categories', backup.categories ?? []);
     restoreTable('todos', backup.todos ?? []);
+    restoreTable('event_todos', backup.event_todos ?? []);
+    restoreTable('settings', backup.settings ?? []);
   });
+
+  // Une sauvegarde v1/v2 porte ses liens dans events.todo_id : on les convertit.
+  migrateEventTodoLinks();
+  // Une sauvegarde v1/v2/v3 ignore end_day : ses événements tiennent sur un jour.
+  migrateEventEndDay();
 }

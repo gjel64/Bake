@@ -1,11 +1,18 @@
 /**
  * AddEventModal — créer / modifier un événement d'agenda.
  *
- * Nouveautés V2 :
+ * Contient :
  *  - une catégorie (couleur partagée avec les to-dos),
- *  - « Depuis un to-do » : remplir l'événement à partir d'une tâche (il reste
- *    lié — cocher l'un cochera l'autre),
- *  - mode édition (pré-rempli) avec suppression.
+ *  - « To-dos liés » : zéro, un ou PLUSIEURS to-dos rattachés à l'événement
+ *    (cocher l'événement coche toutes ces tâches, et inversement),
+ *  - mode édition (pré-rempli) avec suppression,
+ *  - un interrupteur « Sur plusieurs jours » : l'événement court alors du
+ *    premier jour (à l'heure de début) au dernier (à l'heure de fin), les
+ *    journées intermédiaires étant occupées en entier.
+ *
+ * Sur une seule journée, choisir une heure de début recale la fin à +1 h ;
+ * sur plusieurs jours les deux heures sont indépendantes (14:00 → 11:00 est
+ * parfaitement valide).
  *
  * Écrit directement en base puis prévient via `onSaved`.
  */
@@ -16,6 +23,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -32,7 +40,15 @@ import {
   getTodos,
   updateEvent,
 } from '@/db/database';
-import { fromDayKey, labelDayLong, toDayKey, toTimeKey } from '@/lib/dates';
+import {
+  addDays,
+  daysBetween,
+  fromDayKey,
+  labelDayLong,
+  labelDayShort,
+  toDayKey,
+  toTimeKey,
+} from '@/lib/dates';
 import { font, radius, spacing, useC, type Palette } from '@/theme';
 
 type Props = {
@@ -40,13 +56,16 @@ type Props = {
   defaultDay: string;
   event?: EventItem | null; // édition
   presetTitle?: string; // pré-remplissage (depuis un to-do)
-  presetTodoId?: number | null;
+  presetTodoIds?: number[];
   presetCategoryId?: number | null;
   onClose: () => void;
   onSaved: () => void;
 };
 
-type PickerKind = 'date' | 'start' | 'end' | null;
+type PickerKind = 'date' | 'endDate' | 'start' | 'end' | null;
+
+/** Durée par défaut d'un événement : une heure. */
+const DEFAULT_DURATION_MS = 60 * 60 * 1000;
 
 function atHour(day: string, hour: number): Date {
   const d = fromDayKey(day);
@@ -54,12 +73,23 @@ function atHour(day: string, hour: number): Date {
   return d;
 }
 
+function atMinute(day: string, hour: number, minute: number): Date {
+  const d = fromDayKey(day);
+  d.setHours(hour, minute, 0, 0);
+  return d;
+}
+
+/** La même date, une heure plus tard. */
+function plusOneHour(d: Date): Date {
+  return new Date(d.getTime() + DEFAULT_DURATION_MS);
+}
+
 export function AddEventModal({
   visible,
   defaultDay,
   event,
   presetTitle,
-  presetTodoId,
+  presetTodoIds,
   presetCategoryId,
   onClose,
   onSaved,
@@ -68,8 +98,10 @@ export function AddEventModal({
   const styles = makeStyles(c);
   const [title, setTitle] = useState('');
   const [categoryId, setCategoryId] = useState<number | null>(null);
-  const [linkTodoId, setLinkTodoId] = useState<number | null>(null);
+  const [linkTodoIds, setLinkTodoIds] = useState<number[]>([]);
   const [day, setDay] = useState<Date>(fromDayKey(defaultDay));
+  const [endDay, setEndDay] = useState<Date>(fromDayKey(defaultDay));
+  const [multiDay, setMultiDay] = useState(false);
   const [start, setStart] = useState<Date>(atHour(defaultDay, 9));
   const [end, setEnd] = useState<Date>(atHour(defaultDay, 10));
   const [picker, setPicker] = useState<PickerKind>(null);
@@ -79,51 +111,97 @@ export function AddEventModal({
     if (!visible) return;
     if (event) {
       // Édition d'un événement existant.
-      setTitle(event.title);
-      setCategoryId(event.category_id);
-      setLinkTodoId(event.todo_id);
-      setDay(fromDayKey(event.day));
-      setStart(atHour(event.day, 9));
-      setEnd(atHour(event.day, 10));
       const [sh, sm] = event.start.split(':').map(Number);
       const [eh, em] = event.end.split(':').map(Number);
-      setStart((s) => { const d = new Date(s); d.setHours(sh, sm); return d; });
-      setEnd((e) => { const d = new Date(e); d.setHours(eh, em); return d; });
+      setTitle(event.title);
+      setCategoryId(event.category_id);
+      setLinkTodoIds(event.todo_ids);
+      setDay(fromDayKey(event.day));
+      setEndDay(fromDayKey(event.end_day));
+      setMultiDay(event.end_day > event.day);
+      setStart(atMinute(event.day, sh, sm));
+      setEnd(atMinute(event.day, eh, em));
+      // On propose les tâches à faire + celles déjà rattachées (pour les retirer).
+      setTodos(
+        getTodos().filter((t) => t.done === 0 || event.todo_ids.includes(t.id)),
+      );
     } else {
       setTitle(presetTitle ?? '');
       setCategoryId(presetCategoryId ?? null);
-      setLinkTodoId(presetTodoId ?? null);
+      setLinkTodoIds(presetTodoIds ?? []);
       setDay(fromDayKey(defaultDay));
+      setEndDay(fromDayKey(defaultDay));
+      setMultiDay(false);
       setStart(atHour(defaultDay, 9));
       setEnd(atHour(defaultDay, 10));
-      // liste des to-dos non planifiés, pour le remplissage rapide
-      setTodos(getTodos().filter((t) => t.done === 0 && t.scheduled === 0));
+      // Tâches à faire : celles déjà planifiées ailleurs restent proposées.
+      setTodos(getTodos().filter((t) => t.done === 0));
     }
     setPicker(null);
-  }, [visible, event, defaultDay, presetTitle, presetTodoId, presetCategoryId]);
+  }, [visible, event, defaultDay, presetTitle, presetTodoIds, presetCategoryId]);
 
   function onPick(selected: Date | undefined) {
     const kind = picker;
     setPicker(null);
     if (!selected) return;
-    if (kind === 'date') setDay(selected);
-    if (kind === 'start') setStart(selected);
+    if (kind === 'date') {
+      setDay(selected);
+      // Le dernier jour ne peut pas passer avant le premier : on le pousse.
+      if (toDayKey(selected) > toDayKey(endDay)) setEndDay(selected);
+    }
+    if (kind === 'endDate') {
+      // Idem dans l'autre sens : un dernier jour trop tôt est ramené au premier.
+      setEndDay(toDayKey(selected) < toDayKey(day) ? day : selected);
+    }
+    if (kind === 'start') {
+      setStart(selected);
+      // Sur une seule journée, la fin suit le début à +1 h ; sur plusieurs
+      // jours c'est l'heure du dernier jour, elle n'a pas à bouger.
+      if (!multiDay) setEnd(plusOneHour(selected));
+    }
     if (kind === 'end') setEnd(selected);
   }
 
-  function fillFromTodo(t: Todo) {
-    setTitle(t.title);
-    setCategoryId(t.category_id);
-    setLinkTodoId(t.id);
+  /** Bascule « sur plusieurs jours » : par défaut le lendemain, sinon retour au jour même. */
+  function toggleMultiDay(on: boolean) {
+    setMultiDay(on);
+    setEndDay(on ? fromDayKey(addDays(toDayKey(day), 1)) : day);
+  }
+
+  /** Rattache / détache un to-do. Le premier rattaché remplit le formulaire. */
+  function toggleTodoLink(t: Todo) {
+    if (linkTodoIds.includes(t.id)) {
+      setLinkTodoIds(linkTodoIds.filter((id) => id !== t.id));
+      return;
+    }
+    // Premier to-do rattaché : on en reprend le titre et la catégorie s'ils sont vides.
+    if (linkTodoIds.length === 0) {
+      if (title.trim().length === 0) setTitle(t.title);
+      if (categoryId === null) setCategoryId(t.category_id);
+    }
+    setLinkTodoIds([...linkTodoIds, t.id]);
   }
 
   function submit() {
     const t = title.trim();
     if (t.length === 0) return;
+    const dayKey = toDayKey(day);
+    const endDayKey = multiDay ? toDayKey(endDay) : dayKey;
+    // Garde-fou : sur une seule journée, une fin avant (ou égale au) début n'a
+    // pas de sens. Sur plusieurs jours, les deux heures sont sur des jours
+    // différents : n'importe quel couple est valide.
+    const safeEnd =
+      endDayKey === dayKey && end.getTime() <= start.getTime() ? plusOneHour(start) : end;
     if (event) {
-      updateEvent(event.id, t, toDayKey(day), toTimeKey(start), toTimeKey(end), categoryId);
+      updateEvent(
+        event.id, t, dayKey, endDayKey,
+        toTimeKey(start), toTimeKey(safeEnd), categoryId, linkTodoIds,
+      );
     } else {
-      addEvent(t, toDayKey(day), toTimeKey(start), toTimeKey(end), categoryId, linkTodoId);
+      addEvent(
+        t, dayKey, endDayKey,
+        toTimeKey(start), toTimeKey(safeEnd), categoryId, linkTodoIds,
+      );
     }
     onSaved();
     onClose();
@@ -136,7 +214,7 @@ export function AddEventModal({
     onClose();
   }
 
-  const showTodoFill = !event && todos.length > 0;
+  const showTodoLinks = todos.length > 0;
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -149,24 +227,27 @@ export function AddEventModal({
               {event ? 'Modifier l’événement' : 'Nouvel événement'}
             </Text>
 
-            {showTodoFill && (
+            {showTodoLinks && (
               <>
-                <Text style={styles.label}>Depuis un to-do</Text>
+                <Text style={styles.label}>To-dos liés (plusieurs possibles)</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.todoRow}>
-                  {todos.map((t) => (
-                    <Pressable
-                      key={t.id}
-                      onPress={() => fillFromTodo(t)}
-                      style={[styles.todoChip, linkTodoId === t.id && styles.todoChipActive]}
-                    >
-                      <Ionicons
-                        name="checkbox-outline"
-                        size={15}
-                        color={t.cat_color ?? c.textMuted}
-                      />
-                      <Text style={styles.todoChipText} numberOfLines={1}>{t.title}</Text>
-                    </Pressable>
-                  ))}
+                  {todos.map((t) => {
+                    const linked = linkTodoIds.includes(t.id);
+                    return (
+                      <Pressable
+                        key={t.id}
+                        onPress={() => toggleTodoLink(t)}
+                        style={[styles.todoChip, linked && styles.todoChipActive]}
+                      >
+                        <Ionicons
+                          name={linked ? 'checkbox' : 'square-outline'}
+                          size={15}
+                          color={linked ? c.primary : (t.cat_color ?? c.textMuted)}
+                        />
+                        <Text style={styles.todoChipText} numberOfLines={1}>{t.title}</Text>
+                      </Pressable>
+                    );
+                  })}
                 </ScrollView>
               </>
             )}
@@ -184,23 +265,68 @@ export function AddEventModal({
 
             <PickerRow
               icon="calendar-outline"
-              label="Date"
+              label={multiDay ? 'Premier jour' : 'Date'}
               value={labelDayLong(toDayKey(day))}
               onPress={() => setPicker('date')}
             />
+
+            {/* Événement long : on ouvre un second sélecteur de date */}
+            <View style={styles.spanRow}>
+              <View style={styles.spanLeft}>
+                <Ionicons name="calendar-number-outline" size={18} color={c.aurora} />
+                <Text style={styles.spanLabel}>Sur plusieurs jours</Text>
+              </View>
+              <Switch
+                value={multiDay}
+                onValueChange={toggleMultiDay}
+                trackColor={{ true: c.primary, false: c.surfaceStrong }}
+                thumbColor={c.white}
+              />
+            </View>
+
+            {multiDay && (
+              <PickerRow
+                icon="calendar-outline"
+                label="Dernier jour"
+                value={labelDayLong(toDayKey(endDay))}
+                onPress={() => setPicker('endDate')}
+              />
+            )}
+
             <View style={styles.timesRow}>
               <View style={styles.timeCol}>
-                <PickerRow icon="time-outline" label="Début" value={toTimeKey(start)} onPress={() => setPicker('start')} />
+                <PickerRow
+                  icon="time-outline"
+                  label={multiDay ? 'Début (1er jour)' : 'Début'}
+                  value={toTimeKey(start)}
+                  onPress={() => setPicker('start')}
+                />
               </View>
               <View style={styles.timeCol}>
-                <PickerRow icon="time-outline" label="Fin" value={toTimeKey(end)} onPress={() => setPicker('end')} />
+                <PickerRow
+                  icon="time-outline"
+                  label={multiDay ? 'Fin (dernier jour)' : 'Fin'}
+                  value={toTimeKey(end)}
+                  onPress={() => setPicker('end')}
+                />
               </View>
             </View>
 
-            {linkTodoId !== null && (
+            {multiDay && (
+              <View style={styles.spanNote}>
+                <Ionicons name="resize-outline" size={14} color={c.aurora} />
+                <Text style={styles.spanNoteText}>{spanSummary(day, endDay, start, end)}</Text>
+              </View>
+            )}
+
+            {linkTodoIds.length > 0 && (
               <View style={styles.linkNote}>
                 <Ionicons name="link-outline" size={14} color={c.aurora} />
-                <Text style={styles.linkNoteText}>Lié à un to-do (coché des deux côtés)</Text>
+                <Text style={styles.linkNoteText}>
+                  {linkTodoIds.length === 1
+                    ? 'Lié à 1 to-do (coché des deux côtés)'
+                    : `Lié à ${linkTodoIds.length} to-dos (cochés des deux côtés)`}
+                </Text>
               </View>
             )}
 
@@ -227,13 +353,32 @@ export function AddEventModal({
 
       {picker !== null && (
         <DateTimePicker
-          value={picker === 'date' ? day : picker === 'start' ? start : end}
-          mode={picker === 'date' ? 'date' : 'time'}
+          value={
+            picker === 'date'
+              ? day
+              : picker === 'endDate'
+                ? endDay
+                : picker === 'start'
+                  ? start
+                  : end
+          }
+          mode={picker === 'date' || picker === 'endDate' ? 'date' : 'time'}
+          // Le dernier jour ne peut pas être choisi avant le premier.
+          minimumDate={picker === 'endDate' ? day : undefined}
           is24Hour
           onChange={(_e, sel) => onPick(sel)}
         />
       )}
     </Modal>
+  );
+}
+
+/** Résumé d'un événement long, ex : « Du 3 juil. 14:00 au 6 juil. 11:00 · 4 jours ». */
+function spanSummary(day: Date, endDay: Date, start: Date, end: Date): string {
+  const total = daysBetween(toDayKey(day), toDayKey(endDay)) + 1;
+  return (
+    `Du ${labelDayShort(toDayKey(day))} ${toTimeKey(start)}` +
+    ` au ${labelDayShort(toDayKey(endDay))} ${toTimeKey(end)} · ${total} jours`
   );
 }
 
@@ -295,6 +440,17 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   todoChipActive: { borderColor: c.primary, backgroundColor: c.primarySoft },
   todoChipText: { fontSize: font.small, color: c.text },
+  spanRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: spacing.md,
+  },
+  spanLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  spanLabel: { fontSize: font.body, color: c.text },
+  spanNote: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  spanNoteText: { fontSize: font.small, color: c.aurora },
   timesRow: { flexDirection: 'row', gap: spacing.sm },
   timeCol: { flex: 1 },
   pickerRow: {

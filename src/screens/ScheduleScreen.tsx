@@ -5,6 +5,10 @@
  * On peut naviguer d'une période à l'autre (‹ ›), ajouter un événement (+),
  * et supprimer un événement (appui long / bouton corbeille).
  *
+ * Un événement peut courir sur plusieurs jours : il apparaît alors sur CHAQUE
+ * jour de sa plage, avec son heure de début le premier jour, sa fin le dernier
+ * et « journée » entre les deux (voir `spanFor`).
+ *
  * Découpage : cet écran gère l'ÉTAT (vue courante, jour sélectionné, données)
  * et délègue le rendu de chaque vue à un petit composant dédié plus bas.
  */
@@ -24,10 +28,11 @@ import {
   getEventCountsInRange,
   getEventsForDay,
   getMeditationSecondsForDay,
-  toggleTodoDone,
+  setTodosDone,
 } from '@/db/database';
 import {
   addDays,
+  daysBetween,
   isSameMonth,
   labelDayLong,
   labelDayShort,
@@ -78,10 +83,14 @@ export function ScheduleScreen() {
     setModalOpen(true);
   }
 
-  /** Coche/décoche un événement lié à un to-do (synchronise les deux). */
+  /**
+   * Coche/décoche un événement lié : on bascule TOUS ses to-dos d'un coup.
+   * Tant qu'il en reste un à faire, la case coche tout ; une fois tout fait,
+   * elle décoche tout.
+   */
   function toggleLinked(ev: EventItem) {
-    if (ev.todo_id == null) return;
-    toggleTodoDone(ev.todo_id);
+    if (ev.todo_ids.length === 0) return;
+    setTodosDone(ev.todo_ids, ev.done !== 1);
     reload();
   }
 
@@ -108,10 +117,12 @@ export function ScheduleScreen() {
         }
       />
 
-      {/* Barre de navigation de période : ‹ label › */}
+      {/* Barre de navigation de période : ‹ label › — le label ramène à aujourd'hui */}
       <View style={styles.navBar}>
         <NavArrow icon="chevron-back" onPress={() => shift(-1)} />
-        <Text style={styles.periodLabel}>{periodLabel}</Text>
+        <Pressable onPress={() => setSelectedDay(todayKey())} hitSlop={8}>
+          <Text style={styles.periodLabel}>{periodLabel}</Text>
+        </Pressable>
         <NavArrow icon="chevron-forward" onPress={() => shift(1)} />
       </View>
 
@@ -194,7 +205,7 @@ function DayView({
     <ScrollView contentContainerStyle={styles.dayList}>
       {meditationSec > 0 && <MeditationBadge seconds={meditationSec} />}
       {events.map((ev) => (
-        <EventRow key={ev.id} event={ev} onOpen={onOpen} onToggle={onToggle} />
+        <EventRow key={ev.id} event={ev} day={day} onOpen={onOpen} onToggle={onToggle} />
       ))}
     </ScrollView>
   );
@@ -217,28 +228,48 @@ function MeditationBadge({ seconds }: { seconds: number }) {
 /** Une ligne d'événement : horaires + titre. Tap = éditer. Case = to-do lié. */
 function EventRow({
   event,
+  day,
   onOpen,
   onToggle,
 }: {
   event: EventItem;
+  day: string; // le jour affiché : un événement long ne s'y montre pas pareil
   onOpen: (ev: EventItem) => void;
   onToggle: (ev: EventItem) => void;
 }) {
   const c = useC();
   const styles = makeStyles(c);
   const accent = event.color ?? c.primary;
-  const linked = event.todo_id != null;
+  const linkCount = event.todo_ids.length;
   const done = event.done === 1;
+  const span = spanFor(event, day);
   return (
     <Pressable onPress={() => onOpen(event)} style={styles.eventRow}>
       <View style={styles.timeCol}>
-        <Text style={styles.timeStart}>{event.start}</Text>
-        <Text style={styles.timeEnd}>{event.end}</Text>
+        {span.total === 1 ? (
+          <>
+            <Text style={styles.timeStart}>{event.start}</Text>
+            <Text style={styles.timeEnd}>{event.end}</Text>
+          </>
+        ) : span.first ? (
+          <>
+            <Text style={styles.timeStart}>{event.start}</Text>
+            <Text style={styles.timeEnd}>→</Text>
+          </>
+        ) : span.last ? (
+          <>
+            <Text style={styles.timeEnd}>→</Text>
+            <Text style={styles.timeStart}>{event.end}</Text>
+          </>
+        ) : (
+          // Journée entièrement occupée : ni début ni fin ce jour-là.
+          <Text style={styles.timeAllDay}>journée</Text>
+        )}
       </View>
       <View style={[styles.eventAccent, { backgroundColor: accent }]} />
 
-      {/* Case à cocher seulement pour un événement lié à un to-do */}
-      {linked && (
+      {/* Case à cocher seulement pour un événement lié à des to-dos */}
+      {linkCount > 0 && (
         <Pressable
           onPress={() => onToggle(event)}
           hitSlop={8}
@@ -254,6 +285,21 @@ function EventRow({
       >
         {event.title}
       </Text>
+
+      {/* Événement long : où on en est dans la plage — « J2/4 » */}
+      {span.total > 1 && (
+        <Text style={[styles.spanBadge, { color: accent, borderColor: accent }]}>
+          J{span.index}/{span.total}
+        </Text>
+      )}
+
+      {/* Avancement quand plusieurs to-dos sont rattachés : « 1/3 » */}
+      {linkCount > 1 && (
+        <Text style={styles.eventCount}>
+          {event.todo_done}/{linkCount}
+        </Text>
+      )}
+
       <Ionicons name="chevron-forward" size={18} color={c.textFaint} />
     </Pressable>
   );
@@ -335,7 +381,7 @@ function WeekDayBlock({
         events.map((ev) => (
           <Pressable key={ev.id} onPress={() => onOpen(ev)} style={styles.weekEventRow}>
             <View style={[styles.weekDot, { backgroundColor: ev.color ?? c.primary }]} />
-            <Text style={styles.weekEventTime}>{ev.start}</Text>
+            <Text style={styles.weekEventTime}>{weekTimeLabel(ev, day)}</Text>
             <Text
               style={[
                 styles.weekEventTitle,
@@ -457,6 +503,27 @@ function Empty({ text }: { text: string }) {
   );
 }
 
+/**
+ * Où en est un événement le jour affiché : sur combien de jours il court
+ * (`total`), le rang de ce jour dans la plage (`index`, à partir de 1) et
+ * s'il s'agit du premier / dernier. Un événement d'une seule journée donne
+ * `{ total: 1, index: 1, first: true, last: true }`.
+ */
+function spanFor(ev: EventItem, day: string) {
+  const total = daysBetween(ev.day, ev.end_day) + 1;
+  const index = daysBetween(ev.day, day) + 1;
+  return { total, index, first: day === ev.day, last: day === ev.end_day };
+}
+
+/** L'heure à montrer dans la vue semaine : début, fin, ou « · » au milieu. */
+function weekTimeLabel(ev: EventItem, day: string): string {
+  const span = spanFor(ev, day);
+  if (span.total === 1) return ev.start;
+  if (span.first) return ev.start;
+  if (span.last) return `→ ${ev.end}`;
+  return '·';
+}
+
 /** Libellé de plage de semaine, ex : "6 – 12 juil.". */
 function weekRangeLabel(day: string): string {
   const days = weekDays(day);
@@ -504,6 +571,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   timeCol: { width: 52 },
   timeStart: { fontSize: font.body, fontWeight: '700', color: c.text },
   timeEnd: { fontSize: font.small, color: c.textMuted },
+  timeAllDay: { fontSize: font.small, color: c.textMuted, fontStyle: 'italic' },
   eventAccent: {
     width: 4,
     height: 36,
@@ -512,6 +580,16 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginHorizontal: spacing.md,
   },
   eventTitle: { flex: 1, fontSize: font.body, color: c.text },
+  eventCount: { fontSize: font.small, fontWeight: '700', color: c.textMuted, marginRight: spacing.xs },
+  spanBadge: {
+    fontSize: font.small,
+    fontWeight: '700',
+    borderWidth: 1,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.xs + 2,
+    paddingVertical: 1,
+    marginRight: spacing.xs,
+  },
   trash: { padding: spacing.xs },
   eventCheck: {
     width: 22, height: 22, borderRadius: 11, borderWidth: 2,

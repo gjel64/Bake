@@ -1,10 +1,14 @@
 /**
- * CategoryEditModal — créer / modifier une catégorie (nom + couleur + icône).
- * Écrit en base puis prévient via `onSaved`. Thémé clair/sombre.
+ * CategoryEditModal — créer / modifier / supprimer une catégorie
+ * (nom + couleur + icône). Écrit en base puis prévient via `onSaved`.
+ *
+ * Supprimer une catégorie ne supprime rien d'autre : les to-dos et événements
+ * concernés repassent simplement en « sans catégorie ».
  */
 
 import { useEffect, useState } from 'react';
 import {
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -14,7 +18,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Category, addCategory, updateCategory } from '@/db/database';
+import { Category, addCategory, deleteCategory, updateCategory } from '@/db/database';
 import { font, habitPalette, onSwatch, radius, spacing, useC } from '@/theme';
 
 const ICONS: (keyof typeof Ionicons.glyphMap)[] = [
@@ -29,9 +33,10 @@ type Props = {
   category: Category | null;
   onClose: () => void;
   onSaved: () => void;
+  onDeleted?: (id: number) => void; // pour désélectionner la catégorie supprimée
 };
 
-export function CategoryEditModal({ visible, category, onClose, onSaved }: Props) {
+export function CategoryEditModal({ visible, category, onClose, onSaved, onDeleted }: Props) {
   const c = useC();
   const [name, setName] = useState('');
   const [color, setColor] = useState(habitPalette[0]);
@@ -52,6 +57,27 @@ export function CategoryEditModal({ visible, category, onClose, onSaved }: Props
     else addCategory(t, color, icon);
     onSaved();
     onClose();
+  }
+
+  function remove() {
+    if (!category) return;
+    Alert.alert(
+      'Supprimer la catégorie',
+      `« ${category.name} » sera retirée. Les tâches et événements concernés passeront en « sans catégorie ».`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: () => {
+            deleteCategory(category.id);
+            onDeleted?.(category.id);
+            onSaved();
+            onClose();
+          },
+        },
+      ],
+    );
   }
 
   return (
@@ -118,6 +144,13 @@ export function CategoryEditModal({ visible, category, onClose, onSaved }: Props
               {category ? 'Enregistrer' : 'Créer'}
             </Text>
           </Pressable>
+
+          {category && (
+            <Pressable onPress={remove} style={styles.deleteBtn}>
+              <Ionicons name="trash-outline" size={18} color={c.danger} />
+              <Text style={[styles.deleteText, { color: c.danger }]}>Supprimer</Text>
+            </Pressable>
+          )}
         </View>
       </View>
     </Modal>
@@ -151,4 +184,9 @@ const styles = StyleSheet.create({
   },
   submit: { marginTop: spacing.lg, borderRadius: radius.md, paddingVertical: spacing.md, alignItems: 'center' },
   submitText: { fontSize: font.body, fontWeight: '700' },
+  deleteBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.sm, paddingVertical: spacing.md, marginTop: spacing.xs,
+  },
+  deleteText: { fontSize: font.body, fontWeight: '600' },
 });
