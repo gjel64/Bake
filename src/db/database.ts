@@ -12,9 +12,15 @@
  * Schéma :
  *   habits(id, name, description, color, created_at)
  *   completions(id, habit_id, day)   -- une ligne = « habit validé ce jour-là »
- *   events(id, title, day, end_day, start, end, category_id, todo_id*)
+ *   events(id, title, day, end_day, start, end, category_id, calendar_id, todo_id*)
  *   event_todos(event_id, todo_id)   -- lien N..N entre événements et to-dos
+ *   calendars(id, name, url, color)  -- abonnements .ics (agendas externes)
  *   settings(key, value)             -- réglages de l'app (clé → valeur texte)
+ *
+ *   `events.calendar_id` distingue les deux origines : NULL = un événement créé
+ *   dans l'app (modifiable), sinon l'abonnement .ics qui l'a apporté. Ces
+ *   derniers sont en LECTURE SEULE — `updateEvent`/`deleteEvent` refusent d'y
+ *   toucher — et sont intégralement réécrits à chaque synchronisation.
  *
  *   `events.day` et `events.end_day` bornent la PLAGE de jours d'un événement
  *   (end_day = day pour un événement d'une seule journée). `start` est l'heure
@@ -51,7 +57,8 @@ export type EventItem = {
   start: string; // "HH:MM" — heure de début, le premier jour
   end: string; // "HH:MM" — heure de fin, le dernier jour
   category_id: number | null;
-  color: string | null; // couleur de la catégorie (jointure, pour l'affichage)
+  calendar_id: number | null; // non nul = importé d'un abonnement .ics (lecture seule)
+  color: string | null; // couleur de la catégorie, sinon celle de l'abonnement
   todo_ids: number[]; // to-dos liés à cet événement (0, 1 ou plusieurs)
   todo_done: number; // combien de ces to-dos sont cochés
   done: number; // 1 si l'événement a des to-dos liés et qu'ils sont TOUS faits
@@ -169,6 +176,15 @@ export function initDatabase(): void {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS calendars (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL,
+      url        TEXT NOT NULL,
+      color      TEXT NOT NULL,
+      last_sync  TEXT,
+      created_at TEXT NOT NULL
+    );
   `);
 
   // Migration douce : ajoute les colonnes manquantes à `events` (V1 → V2).
@@ -177,6 +193,9 @@ export function initDatabase(): void {
 
   // V3 → V4 : un événement porte une plage de jours (day → end_day).
   ensureColumn('events', 'end_day', 'end_day TEXT');
+
+  // V4 → V5 : un événement peut venir d'un abonnement .ics.
+  ensureColumn('events', 'calendar_id', 'calendar_id INTEGER');
 
   // V2 → V3 : le lien unique events.todo_id devient la table event_todos.
   migrateEventTodoLinks();
@@ -327,8 +346,8 @@ export function daysUntilCanAddHabit(): number {
  */
 const EVENT_SELECT = `
   SELECT e.id, e.title, e.day, COALESCE(e.end_day, e.day) AS end_day,
-         e.start, e.end, e.category_id,
-         c.color AS color,
+         e.start, e.end, e.category_id, e.calendar_id,
+         COALESCE(c.color, cal.color) AS color,
          (SELECT group_concat(et.todo_id)
             FROM event_todos et WHERE et.event_id = e.id) AS todo_ids_csv,
          (SELECT COUNT(*)
@@ -337,6 +356,7 @@ const EVENT_SELECT = `
            WHERE et.event_id = e.id AND t.done = 1) AS todo_done
   FROM events e
   LEFT JOIN categories c ON c.id = e.category_id
+  LEFT JOIN calendars cal ON cal.id = e.calendar_id
 `;
 
 /** La ligne brute renvoyée par EVENT_SELECT (avant mise en forme). */
@@ -387,27 +407,40 @@ export function getEventsInRange(startDay: string, endDay: string): EventItem[] 
     .map(mapEvent);
 }
 
-/** Le nombre d'événements par jour sur une plage : { "2026-07-06": 2, … }.
- *  Sert à afficher une pastille sous les jours occupés dans la vue mois.
+/** Ce qu'il faut savoir d'un jour pour la grille du mois. */
+export type DaySummary = {
+  count: number; // nombre d'événements couvrant ce jour
+  colors: string[]; // leurs couleurs, sans doublon, dans l'ordre d'affichage
+};
+
+/** Le résumé de chaque jour occupé d'une plage : { "2026-07-06": { count, colors }, … }.
+ *  Sert aux pastilles colorées de la vue mois et de la bande semaine.
  *  Un événement sur plusieurs jours compte pour CHAQUE jour qu'il couvre :
  *  impossible à faire en SQL simple, on déplie donc la plage en JS. */
-export function getEventCountsInRange(
+export function getEventDaysInRange(
   startDay: string,
   endDay: string,
-): Record<string, number> {
-  const rows = db.getAllSync<{ day: string; end_day: string }>(
-    `SELECT day, COALESCE(end_day, day) AS end_day FROM events
-     WHERE day <= ? AND COALESCE(end_day, day) >= ?`,
+): Record<string, DaySummary> {
+  const rows = db.getAllSync<{ day: string; end_day: string; color: string | null }>(
+    `SELECT e.day, COALESCE(e.end_day, e.day) AS end_day,
+            COALESCE(c.color, cal.color) AS color
+       FROM events e
+       LEFT JOIN categories c ON c.id = e.category_id
+       LEFT JOIN calendars cal ON cal.id = e.calendar_id
+      WHERE e.day <= ? AND COALESCE(e.end_day, e.day) >= ?
+      ORDER BY e.day ASC, e.start ASC`,
     endDay,
     startDay,
   );
-  const map: Record<string, number> = {};
+  const map: Record<string, DaySummary> = {};
   for (const r of rows) {
     // On borne la plage de l'événement à celle demandée avant de la déplier.
     let d = r.day < startDay ? startDay : r.day;
     const last = r.end_day > endDay ? endDay : r.end_day;
     while (d <= last) {
-      map[d] = (map[d] ?? 0) + 1;
+      const entry = (map[d] ??= { count: 0, colors: [] });
+      entry.count += 1;
+      if (r.color && !entry.colors.includes(r.color)) entry.colors.push(r.color);
       d = addDays(d, 1);
     }
   }
@@ -459,7 +492,7 @@ export function updateEvent(
   db.withTransactionSync(() => {
     db.runSync(
       `UPDATE events SET title = ?, day = ?, end_day = ?, start = ?, end = ?, category_id = ?
-       WHERE id = ?`,
+       WHERE id = ? AND calendar_id IS NULL`,
       title.trim(),
       day,
       endDay < day ? day : endDay,
@@ -488,8 +521,105 @@ function linkTodos(eventId: number, todoIds: number[]): void {
 export function deleteEvent(id: number): void {
   db.withTransactionSync(() => {
     db.runSync('DELETE FROM event_todos WHERE event_id = ?', id);
-    db.runSync('DELETE FROM events WHERE id = ?', id);
+    db.runSync('DELETE FROM events WHERE id = ? AND calendar_id IS NULL', id);
   });
+}
+
+// ===========================================================================
+//  CALENDARS (abonnements .ics)
+// ===========================================================================
+
+/** Un abonnement à un agenda externe (lien .ics). */
+export type CalendarSub = {
+  id: number;
+  name: string;
+  url: string;
+  color: string; // couleur de TOUS les événements de cet abonnement
+  last_sync: string | null; // "YYYY-MM-DD HH:MM" locale, ou null si jamais synchronisé
+  created_at: string;
+};
+
+/** Un événement lu dans un fichier .ics, prêt à être rangé en base. */
+export type ImportedEvent = {
+  title: string;
+  day: string; // "YYYY-MM-DD"
+  end_day: string;
+  start: string; // "HH:MM"
+  end: string;
+};
+
+/** Les abonnements, du plus ancien au plus récent. */
+export function getCalendars(): CalendarSub[] {
+  return db.getAllSync<CalendarSub>('SELECT * FROM calendars ORDER BY id ASC');
+}
+
+/** Un abonnement par son id (null s'il vient d'être supprimé). */
+export function getCalendar(id: number): CalendarSub | null {
+  return db.getFirstSync<CalendarSub>('SELECT * FROM calendars WHERE id = ?', id) ?? null;
+}
+
+/** Crée un abonnement (sans rien télécharger) et renvoie son id. */
+export function addCalendar(name: string, url: string, color: string): number {
+  const r = db.runSync(
+    'INSERT INTO calendars (name, url, color, last_sync, created_at) VALUES (?, ?, ?, NULL, ?)',
+    name.trim(),
+    url.trim(),
+    color,
+    todayKey(),
+  );
+  return r.lastInsertRowId;
+}
+
+/** Renomme / recolore / repointe un abonnement. */
+export function updateCalendar(id: number, name: string, url: string, color: string): void {
+  db.runSync(
+    'UPDATE calendars SET name = ?, url = ?, color = ? WHERE id = ?',
+    name.trim(),
+    url.trim(),
+    color,
+    id,
+  );
+}
+
+/** Supprime un abonnement ET tous les événements qu'il avait apportés. */
+export function deleteCalendar(id: number): void {
+  db.withTransactionSync(() => {
+    db.runSync('DELETE FROM events WHERE calendar_id = ?', id);
+    db.runSync('DELETE FROM calendars WHERE id = ?', id);
+  });
+}
+
+/**
+ * Remplace d'un bloc tous les événements d'un abonnement par ceux qu'on vient
+ * de lire. C'est volontairement brutal — supprimer puis réinsérer — parce que
+ * c'est la seule façon simple de refléter une suppression faite à la source.
+ * Les événements créés dans l'app (calendar_id NULL) ne sont jamais touchés.
+ */
+export function replaceCalendarEvents(id: number, events: ImportedEvent[]): void {
+  db.withTransactionSync(() => {
+    db.runSync('DELETE FROM events WHERE calendar_id = ?', id);
+    for (const e of events) {
+      db.runSync(
+        `INSERT INTO events (title, day, end_day, start, end, category_id, calendar_id)
+         VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+        e.title,
+        e.day,
+        e.end_day < e.day ? e.day : e.end_day,
+        e.start,
+        e.end,
+        id,
+      );
+    }
+    db.runSync('UPDATE calendars SET last_sync = ? WHERE id = ?', localStamp(), id);
+  });
+}
+
+/** Horodatage local lisible, "YYYY-MM-DD HH:MM" — pour `last_sync`. */
+function localStamp(): string {
+  const d = new Date();
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${todayKey()} ${h}:${m}`;
 }
 
 // ===========================================================================
@@ -822,6 +952,9 @@ export function unscheduleTodo(todoId: number): void {
 /** Heure du rappel quotidien des habitudes, "HH:MM" (absent = désactivé). */
 export const SETTING_HABITS_REMINDER_TIME = 'habits_reminder_time';
 
+/** Apparence forcée : "light" ou "dark" (absent = on suit le téléphone). */
+export const SETTING_THEME_MODE = 'theme_mode';
+
 /** Lit un réglage, ou null s'il n'a jamais été posé. */
 export function getSetting(key: string): string | null {
   const row = db.getFirstSync<{ value: string }>(
@@ -849,8 +982,8 @@ export function setSetting(key: string, value: string | null): void {
 //  EXPORT / IMPORT (sauvegarde anti-réinstallation)
 // ===========================================================================
 
-/** Version du format d'export (4 = événements sur plusieurs jours + réglages). */
-export const BACKUP_VERSION = 4;
+/** Version du format d'export (5 = abonnements .ics). */
+export const BACKUP_VERSION = 5;
 
 type Backup = {
   version: number;
@@ -863,6 +996,7 @@ type Backup = {
   todos: unknown[];
   event_todos?: unknown[]; // absent des sauvegardes v1/v2
   settings?: unknown[]; // absent des sauvegardes v1/v2/v3
+  calendars?: unknown[]; // absent des sauvegardes v1..v4
 };
 
 /** Rassemble TOUTES les données brutes dans un objet sérialisable (JSON). */
@@ -879,6 +1013,7 @@ export function exportData(): Backup {
     todos: dump('todos'),
     event_todos: dump('event_todos'),
     settings: dump('settings'),
+    calendars: dump('calendars'),
   };
 }
 
@@ -903,7 +1038,7 @@ export function importData(backup: Backup): void {
   db.withTransactionSync(() => {
     const tables = [
       'habits', 'completions', 'events', 'meditations',
-      'categories', 'todos', 'event_todos', 'settings',
+      'categories', 'todos', 'event_todos', 'settings', 'calendars',
     ];
     for (const t of tables) db.runSync(`DELETE FROM ${t}`);
 
@@ -915,6 +1050,7 @@ export function importData(backup: Backup): void {
     restoreTable('todos', backup.todos ?? []);
     restoreTable('event_todos', backup.event_todos ?? []);
     restoreTable('settings', backup.settings ?? []);
+    restoreTable('calendars', backup.calendars ?? []);
   });
 
   // Une sauvegarde v1/v2 porte ses liens dans events.todo_id : on les convertit.

@@ -134,7 +134,7 @@ export function TodoScreen() {
       <SafeAreaView style={styles.container} edges={['bottom']}>
         <GradientHeader
           title="To-do"
-          subtitle={pending.length === 0 ? 'Rien en attente — souffle.' : `${pending.length} à faire`}
+          subtitle={pending.length === 0 ? 'Rien à faire' : `${pending.length} à faire`}
         />
 
         <View style={styles.modeRow}>

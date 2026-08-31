@@ -1,6 +1,9 @@
 /**
  * SegmentedControl — sélecteur à segments façon iOS (Jour / Semaine / Mois).
  * Piste creuse + pastille active pleine avec une ombre douce. Thémé.
+ *
+ * Par défaut chaque segment fait la largeur de son libellé (en-tête d'écran) ;
+ * `fill` les répartit à parts égales sur toute la largeur (ligne de réglage).
  */
 
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -10,9 +13,10 @@ type Props<T extends string> = {
   options: readonly T[];
   value: T;
   onChange: (value: T) => void;
+  fill?: boolean; // segments à parts égales sur toute la largeur
 };
 
-export function SegmentedControl<T extends string>({ options, value, onChange }: Props<T>) {
+export function SegmentedControl<T extends string>({ options, value, onChange, fill }: Props<T>) {
   const c = useC();
   return (
     <View style={[styles.track, { backgroundColor: c.surfaceAlt }]}>
@@ -22,9 +26,17 @@ export function SegmentedControl<T extends string>({ options, value, onChange }:
           <Pressable
             key={opt}
             onPress={() => onChange(opt)}
-            style={[styles.segment, active && [styles.active, softShadow, { backgroundColor: c.surface }]]}
+            style={[
+              styles.segment,
+              fill && styles.segmentFill,
+              active && [styles.active, softShadow, { backgroundColor: c.surface }],
+            ]}
           >
-            <Text style={[styles.label, { color: active ? c.text : c.textMuted }]}>{opt}</Text>
+            <Text
+              style={[styles.label, fill && styles.labelFill, { color: active ? c.text : c.textMuted }]}
+            >
+              {opt}
+            </Text>
           </Pressable>
         );
       })}
@@ -39,6 +51,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs + 2,
     borderRadius: radius.sm - 2,
   },
+  segmentFill: { flex: 1 },
   active: {},
   label: { fontSize: font.small, fontWeight: '600' },
+  labelFill: { fontSize: font.body, textAlign: 'center' },
 });

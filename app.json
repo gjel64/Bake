@@ -4,12 +4,15 @@
     "slug": "bake",
     "version": "3.0.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "backgroundColor": "#F2F2F7",
     "splash": {
+      "image": "./assets/splash-icon.png",
       "backgroundColor": "#F2F2F7",
       "resizeMode": "contain",
       "dark": {
+        "image": "./assets/splash-icon.png",
         "backgroundColor": "#000000"
       }
     },
@@ -20,7 +23,8 @@
       [
         "expo-notifications",
         {
-          "color": "#54D6A6"
+          "icon": "./assets/notification-icon.png",
+          "color": "#E8B45E"
         }
       ]
     ],
@@ -29,7 +33,11 @@
     },
     "android": {
       "package": "com.bake.app",
-      "allowBackup": true
+      "allowBackup": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0C1712"
+      }
     },
     "web": {},
     "extra": {

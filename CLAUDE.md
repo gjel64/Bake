@@ -29,10 +29,11 @@ index.ts                → registerRootComponent(App)
 src/App.tsx             → initDatabase() + initNotifications(), tab bar flottante, thème navigation
 src/theme.ts            → palettes clair/sombre + tokens (spacing, radius, font, softShadow)
 src/db/database.ts      → 100 % de la persistance (schéma + toutes les requêtes)
-src/lib/               → dates, notifications, backup, sound  (fonctions pures ou I/O isolées)
+src/lib/               → dates, notifications, backup, sound, themeMode, ics, calendars  (fonctions pures ou I/O isolées)
 src/screens/           → un écran par onglet, porte l'ÉTAT
 src/components/        → modales et widgets métier
-src/components/ui/     → briques visuelles réutilisables (GlassCard, ProgressRing, Heatmap, …)
+src/components/ui/     → briques visuelles réutilisables (GlassCard, ProgressRing, Heatmap, BakeLogo, …)
+assets/                → icônes de l'app, générées par scripts/make_icons.mjs
 ```
 
 Alias TypeScript : `@/*` → `src/*`. Toujours importer via `@/`, jamais en chemins relatifs (`../../`).
@@ -45,7 +46,7 @@ Alias TypeScript : `@/*` → `src/*`. Toujours importer via `@/`, jamais en chem
    Passer par `@/lib/dates` (`todayKey`, `addDays`, `weekDays`, `monthGrid`, `labelDayLong`…). Jamais d'UTC, jamais de `Date` stocké en base.
 3. **Aucune couleur en dur.** `const c = useC()` dans le composant, puis `const styles = makeStyles(c)` —
    `makeStyles` est une fonction `(c: Palette) => StyleSheet.create({...})` définie en bas de fichier.
-   Espacements/rayons/tailles viennent de `spacing`, `radius`, `font`. Le mode clair/sombre suit le système et doit rester lisible dans les deux.
+   Espacements/rayons/tailles viennent de `spacing`, `radius`, `font`. Le mode clair/sombre suit le réglage « Apparence » (Système / Clair / Sombre) et doit rester lisible dans les deux.
 4. **Rechargement des écrans** : `useFocusEffect(useCallback(() => refresh(), [refresh]))`.
    Il n'y a ni store global ni cache — chaque onglet relit la base quand il redevient visible. Ne pas introduire de Context/Zustand sans raison forte.
 5. **Chaque fichier commence par un bloc JSDoc** qui explique son rôle en français, et chaque fonction exportée a sa ligne de doc. C'est la convention dominante du projet, la respecter.
@@ -55,10 +56,13 @@ Alias TypeScript : `@/*` → `src/*`. Toujours importer via `@/`, jamais en chem
 
 - **Migrations** : pas de framework. `initDatabase()` fait `CREATE TABLE IF NOT EXISTS` puis `ensureColumn(...)` pour les colonnes ajoutées après coup. Donc : on **ajoute** des colonnes, on n'en renomme ni supprime jamais (les bases installées ne seraient pas migrées). Une migration de données doit être **idempotente** : elle tourne à chaque démarrage. Exemple à copier — `migrateEventTodoLinks()` recopie `events.todo_id` dans `event_todos` **puis vide la colonne**, sinon un lien supprimé par l'utilisateur réapparaîtrait au lancement suivant.
 - **Événements ↔ to-dos** : relation N..N via la table `event_todos`. Un événement est « fait » quand il a au moins un to-do lié et qu'ils sont **tous** cochés (`mapEvent()`). Supprimer/déplanifier un to-do supprime l'événement seulement s'il ne reste plus aucun to-do rattaché.
-- **Événements sur plusieurs jours** : la plage est `events.day` → `events.end_day` (jamais NULL après `migrateEventEndDay()`). `start` est l'heure du **premier** jour, `end` celle du **dernier**, les jours du milieu sont occupés en entier. `getEventsForDay()` renvoie donc un événement long **à chaque** jour de sa plage, et `getEventCountsInRange()` déplie la plage en JS (impossible en SQL simple). Côté écran, `spanFor()` dit où on en est dans la plage.
+- **Événements sur plusieurs jours** : la plage est `events.day` → `events.end_day` (jamais NULL après `migrateEventEndDay()`). `start` est l'heure du **premier** jour, `end` celle du **dernier**, les jours du milieu sont occupés en entier. `getEventsForDay()` renvoie donc un événement long **à chaque** jour de sa plage, et `getEventDaysInRange()` déplie la plage en JS (impossible en SQL simple) pour donner, par jour, le nombre d'événements et leurs couleurs. Côté écran, `spanFor()` dit où on en est dans la plage.
 - **Rappel quotidien des habitudes** : un seul rappel global, heure stockée dans `settings` (`habits_reminder_time`), notification répétitive `{ hour, minute, repeats: true }`. Son texte est **figé** — une notif répétée ne peut pas être personnalisée à l'instant où elle sonne. On ne garde aucun identifiant : les notifs portent le marqueur `data.kind = 'habits-daily'`, ce qui permet de les retrouver même après un import. Rejouer `syncHabitsReminder()` après tout ce qui peut changer le réglage dans le dos de l'app.
+- **Abonnements .ics** : un abonnement (`calendars`) apporte des événements dans la table `events` avec `calendar_id` renseigné. Ce sont des événements comme les autres pour l'affichage (leur couleur vient de l'abonnement à défaut de catégorie), mais en **lecture seule** : `updateEvent`/`deleteEvent` portent un `AND calendar_id IS NULL`, et l'agenda n'ouvre qu'une alerte de détail. Chaque synchronisation **efface puis réinsère** tout le lot de l'abonnement (`replaceCalendarEvents`) — c'est ce qui permet de refléter une suppression faite à la source. `lib/ics.ts` est un parseur maison volontairement partiel (RRULE simple, pas de fuseaux hors `Z`, pas de `RECURRENCE-ID`) qui déplie les récurrences sur une fenêtre bornée : ne pas l'étendre sans raison, préférer documenter la limite. La synchro est lancée une fois par session, à la première ouverture de l'agenda.
 - **Sauvegarde** : toute nouvelle table doit être ajoutée dans `exportData()` **et** `importData()` de `database.ts`, et `BACKUP_VERSION` incrémenté si le format change. `importData()` termine par les migrations, pour qu'une vieille sauvegarde soit convertie au format courant.
 - **Notifications locales** : ne fonctionnent **pas dans Expo Go** — tester avec un build dev/preview. Les fonctions de `lib/notifications.ts` échouent en silence (try/catch) pour ne jamais casser l'app ; garder ce comportement.
+- **Apparence (clair/sombre)** : `ThemeProvider` (dans `theme.ts`) enveloppe toute l'app et décide de la palette — le réglage de l'utilisateur (`settings.theme_mode`, via `lib/themeMode.ts`) sinon le téléphone. Conséquence : `initDatabase()` tourne dans un initialiseur paresseux de `App`, **avant** le premier rendu, parce que le provider lit le réglage dès son montage (un `useEffect` passerait après celui des enfants). Ne lire l'apparence que par `useC()` / `useIsDark()` / `useThemeMode()` — plus jamais `useColorScheme()` directement. Après un import de sauvegarde, rejouer `setMode(getThemeMode())` (comme `syncHabitsReminder()`).
+- **Icônes** : `scripts/make_icons.mjs` (`node scripts/make_icons.mjs`) regénère les quatre PNG d'`assets/` à partir d'un SVG unique, rasterisé par Chrome headless — aucune dépendance npm. Le même tracé est recopié à la main dans `components/ui/BakeLogo.tsx` (react-native-svg) : toucher à l'un impose de toucher à l'autre. Changer d'icône impose un nouveau build (`eas build`), pas un simple rechargement Metro.
 - **Reanimated** : son plugin doit rester **le dernier** de `babel.config.js`, et tout changement de Babel impose `npx expo start -c`.
 - **LayoutAnimation sur Android** : nécessite `UIManager.setLayoutAnimationEnabledExperimental?.(true)` au niveau module (voir `HabitsScreen`/`TodoScreen`).
 - **Tab bar flottante** (`position: 'absolute'`) : elle recouvre le bas des écrans. Prévoir ~150 px de `paddingBottom` sur les listes et remonter les FAB en conséquence.
@@ -68,5 +72,5 @@ Alias TypeScript : `@/*` → `src/*`. Toujours importer via `@/`, jamais en chem
 
 ## Divers
 
-- `scripts/make_bell.py` est un générateur d'asset hors runtime (`assets/bell.wav`), lancé à la main.
+- `scripts/make_bell.py` et `scripts/make_icons.mjs` sont des générateurs d'assets hors runtime (`assets/bell.wav`, les icônes), lancés à la main.
 - `GUIDE.md` est un cours de React Native écrit pour un profil C++ : c'est de la doc d'apprentissage, pas une spec du projet. Il décrit l'app telle qu'elle était à ses débuts — ne pas s'y fier pour l'état actuel du code.

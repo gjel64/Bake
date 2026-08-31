@@ -4,11 +4,12 @@
  * Initialise la base, les notifications et le rappel quotidien des habitudes,
  * puis pose une tab bar FLOTTANTE
  * arrondie (détachée du bord, icônes seules, tap uniquement). Le thème
- * (clair / sombre) suit le système via `useColorScheme`.
+ * (clair / sombre) vient de `ThemeProvider` : l'apparence choisie dans les
+ * Réglages, ou celle du téléphone tant qu'on est en « Système ».
  */
 
-import { useEffect } from 'react';
-import { StyleSheet, useColorScheme } from 'react-native';
+import { useEffect, useState } from 'react';
+import { StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -28,7 +29,7 @@ import { StatsScreen } from '@/screens/StatsScreen';
 import { initDatabase } from '@/db/database';
 import { initNotifications } from '@/lib/notifications';
 import { syncHabitsReminder } from '@/lib/habitsReminder';
-import { darkColors, lightColors } from '@/theme';
+import { ThemeProvider, darkColors, lightColors, useIsDark } from '@/theme';
 
 /** Icônes d'onglet : pleine si actif, contour sinon (convention iOS). */
 function icon(routeName: string, focused: boolean): keyof typeof Ionicons.glyphMap {
@@ -46,8 +47,15 @@ function icon(routeName: string, focused: boolean): keyof typeof Ionicons.glyphM
 const Tab = createBottomTabNavigator();
 
 export default function App(): React.JSX.Element {
-  useEffect(() => {
+  // La base doit être prête AVANT le premier rendu : `ThemeProvider` y lit
+  // l'apparence choisie dès son montage. D'où l'initialisation paresseuse
+  // (synchrone, jouée une seule fois) plutôt qu'un effet, qui passerait après.
+  useState(() => {
     initDatabase();
+    return true;
+  });
+
+  useEffect(() => {
     // Canaux + permission d'abord, puis on remet le rappel quotidien des
     // habitudes en place (réinstallation, restauration de sauvegarde…).
     initNotifications().then(syncHabitsReminder);
@@ -55,15 +63,16 @@ export default function App(): React.JSX.Element {
 
   return (
     <SafeAreaProvider>
-      <AppNav />
+      <ThemeProvider>
+        <AppNav />
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }
 
 /** La navigation, à l'intérieur du SafeAreaProvider (pour lire les marges). */
 function AppNav() {
-  const scheme = useColorScheme();
-  const dark = scheme === 'dark';
+  const dark = useIsDark();
   const c = dark ? darkColors : lightColors;
   const insets = useSafeAreaInsets();
 

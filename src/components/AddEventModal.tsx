@@ -54,6 +54,7 @@ import { font, radius, spacing, useC, type Palette } from '@/theme';
 type Props = {
   visible: boolean;
   defaultDay: string;
+  defaultHour?: number; // heure de départ proposée (créneau touché dans le planning)
   event?: EventItem | null; // édition
   presetTitle?: string; // pré-remplissage (depuis un to-do)
   presetTodoIds?: number[];
@@ -87,6 +88,7 @@ function plusOneHour(d: Date): Date {
 export function AddEventModal({
   visible,
   defaultDay,
+  defaultHour,
   event,
   presetTitle,
   presetTodoIds,
@@ -132,13 +134,15 @@ export function AddEventModal({
       setDay(fromDayKey(defaultDay));
       setEndDay(fromDayKey(defaultDay));
       setMultiDay(false);
-      setStart(atHour(defaultDay, 9));
-      setEnd(atHour(defaultDay, 10));
+      // Créneau touché dans le planning du jour, sinon 9 h par défaut.
+      const h = defaultHour ?? 9;
+      setStart(atHour(defaultDay, h));
+      setEnd(atHour(defaultDay, Math.min(h + 1, 23)));
       // Tâches à faire : celles déjà planifiées ailleurs restent proposées.
       setTodos(getTodos().filter((t) => t.done === 0));
     }
     setPicker(null);
-  }, [visible, event, defaultDay, presetTitle, presetTodoIds, presetCategoryId]);
+  }, [visible, event, defaultDay, defaultHour, presetTitle, presetTodoIds, presetCategoryId]);
 
   function onPick(selected: Date | undefined) {
     const kind = picker;

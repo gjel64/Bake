@@ -151,7 +151,7 @@ function EmptyState({ hasHabits }: { hasHabits: boolean }) {
       </Text>
       <Text style={styles.emptyText}>
         {hasHabits
-          ? 'Prends un instant pour toi. À demain.'
+          ? 'habitude complétées, la classe!'
           : 'Appuie sur + pour créer ta première habitude.'}
       </Text>
     </View>

@@ -1,6 +1,6 @@
 /**
- * SettingsModal — les réglages : rappel quotidien des habitudes, sauvegarde
- * (export/import) et catégories.
+ * SettingsModal — les réglages : apparence (clair / sombre), rappel quotidien
+ * des habitudes, abonnements .ics, sauvegarde (export/import) et catégories.
  *
  * Ouvert en plein écran depuis l'icône engrenage de l'écran Stats.
  */
@@ -21,15 +21,44 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 
+import { BakeLogo } from '@/components/ui/BakeLogo';
+import { CalendarSubModal } from '@/components/CalendarSubModal';
 import { CategoryEditModal } from '@/components/CategoryEditModal';
-import { Category, deleteCategory, getCategories } from '@/db/database';
+import { SegmentedControl } from '@/components/SegmentedControl';
+import { CalendarSub, Category, deleteCategory, getCalendars, getCategories } from '@/db/database';
+import { syncCalendar } from '@/lib/calendars';
 import { exportToFile, importFromFile } from '@/lib/backup';
 import { getHabitsReminderTime, setHabitsReminderTime, syncHabitsReminder } from '@/lib/habitsReminder';
 import { toTimeKey } from '@/lib/dates';
-import { font, onSwatch, radius, spacing, useC, type Palette } from '@/theme';
+import { getThemeMode } from '@/lib/themeMode';
+import {
+  font,
+  onSwatch,
+  radius,
+  spacing,
+  useC,
+  useThemeMode,
+  type Palette,
+  type ThemeMode,
+} from '@/theme';
 
 /** Heure proposée à la première activation du rappel. */
 const DEFAULT_REMINDER_TIME = '06:00';
+
+/** Les trois apparences, dans l'ordre du sélecteur. */
+const THEME_LABELS = ['Système', 'Clair', 'Sombre'] as const;
+type ThemeLabel = (typeof THEME_LABELS)[number];
+
+const LABEL_BY_MODE: Record<ThemeMode, ThemeLabel> = {
+  system: 'Système',
+  light: 'Clair',
+  dark: 'Sombre',
+};
+const MODE_BY_LABEL: Record<ThemeLabel, ThemeMode> = {
+  Système: 'system',
+  Clair: 'light',
+  Sombre: 'dark',
+};
 
 /** Convertit "HH:MM" en Date (aujourd'hui à cette heure), pour le sélecteur natif. */
 function timeToDate(time: string): Date {
@@ -48,9 +77,15 @@ export function SettingsModal({
 }) {
   const c = useC();
   const styles = makeStyles(c);
+  const { mode, dark, setMode } = useThemeMode();
   const [cats, setCats] = useState<Category[]>([]);
   const [editing, setEditing] = useState<Category | null>(null);
   const [catModal, setCatModal] = useState(false);
+  // Abonnements .ics : la liste, la modale d'édition, et l'id en cours de synchro.
+  const [calendars, setCalendars] = useState<CalendarSub[]>([]);
+  const [editingCal, setEditingCal] = useState<CalendarSub | null>(null);
+  const [calModal, setCalModal] = useState(false);
+  const [syncing, setSyncing] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   // Rappel quotidien des habitudes : "HH:MM" ou null (désactivé).
   const [reminder, setReminder] = useState<string | null>(null);
@@ -59,7 +94,21 @@ export function SettingsModal({
   const refresh = () => {
     setCats(getCategories());
     setReminder(getHabitsReminderTime());
+    setCalendars(getCalendars());
   };
+
+  /** Relance le téléchargement d'un abonnement et dit ce qu'il en est. */
+  async function refreshCalendar(cal: CalendarSub) {
+    setSyncing(cal.id);
+    const result = await syncCalendar(cal);
+    setSyncing(null);
+    refresh();
+    if (result.ok) {
+      Alert.alert('À jour', `${cal.name} : ${result.count} événement(s) récupéré(s).`);
+    } else {
+      Alert.alert('Synchronisation impossible', result.error);
+    }
+  }
   useEffect(() => {
     if (visible) refresh();
   }, [visible]);
@@ -116,6 +165,8 @@ export function SettingsModal({
                 // La sauvegarde a rapporté un id de notification périmé :
                 // on reprogramme le rappel d'après l'heure restaurée.
                 await syncHabitsReminder();
+                // L'apparence voyage elle aussi dans la sauvegarde.
+                setMode(getThemeMode());
                 refresh();
                 Alert.alert('Import réussi', 'Tes données ont été restaurées.');
               }
@@ -156,11 +207,29 @@ export function SettingsModal({
           </View>
 
           <ScrollView contentContainerStyle={styles.body}>
+            {/* Apparence */}
+            <Text style={styles.section}>APPARENCE</Text>
+            <View style={styles.themeRow}>
+              <Ionicons
+                name={dark ? 'moon' : 'sunny'}
+                size={20}
+                color={c.aurora}
+                style={styles.themeIcon}
+              />
+              <View style={styles.themePicker}>
+                <SegmentedControl
+                  options={THEME_LABELS}
+                  value={LABEL_BY_MODE[mode]}
+                  onChange={(label) => setMode(MODE_BY_LABEL[label])}
+                  fill
+                />
+              </View>
+            </View>
+
             {/* Rappel quotidien des habitudes */}
             <Text style={styles.section}>RAPPEL DES HABITUDES</Text>
             <Text style={styles.hint}>
-              Une notification chaque jour à l’heure de ton choix, pour penser à
-              valider tes habitudes. (Elle sonne même si tout est déjà validé.)
+              Une notification chaque jour à l’heure de ton choix
             </Text>
             <View style={styles.remindRow}>
               <View style={styles.remindLeft}>
@@ -181,6 +250,61 @@ export function SettingsModal({
                 <Text style={styles.remindTimeValue}>{reminder}</Text>
                 <Ionicons name="chevron-forward" size={18} color={c.textMuted} />
               </Pressable>
+            )}
+
+            {/* Abonnements .ics */}
+            <View style={styles.sectionHead}>
+              <Text style={styles.section}>ABONNEMENTS</Text>
+              <Pressable
+                onPress={() => {
+                  setEditingCal(null);
+                  setCalModal(true);
+                }}
+                hitSlop={8}
+                style={styles.addCat}
+              >
+                <Ionicons name="add" size={18} color={c.textOnAurora} />
+              </Pressable>
+            </View>
+            <Text style={styles.hint}>
+              Suis un agenda extérieur depuis son lien .ics : ses événements
+              apparaissent dans l’agenda, dans la couleur de l’abonnement, en
+              lecture seule. Mise à jour à chaque démarrage de Bake.
+            </Text>
+
+            {calendars.length === 0 ? (
+              <Text style={styles.emptyLine}>Aucun abonnement.</Text>
+            ) : (
+              calendars.map((cal) => (
+                <Pressable
+                  key={cal.id}
+                  onPress={() => {
+                    setEditingCal(cal);
+                    setCalModal(true);
+                  }}
+                  style={styles.calRow}
+                >
+                  <View style={[styles.calDot, { backgroundColor: cal.color }]} />
+                  <View style={styles.calTexts}>
+                    <Text style={styles.calName} numberOfLines={1}>{cal.name}</Text>
+                    <Text style={styles.calMeta} numberOfLines={1}>
+                      {cal.last_sync ? `Mis à jour le ${cal.last_sync}` : 'Jamais synchronisé'}
+                    </Text>
+                  </View>
+                  {syncing === cal.id ? (
+                    <ActivityIndicator color={c.aurora} style={styles.catAction} />
+                  ) : (
+                    <Pressable
+                      onPress={() => refreshCalendar(cal)}
+                      hitSlop={8}
+                      style={styles.catAction}
+                    >
+                      <Ionicons name="refresh" size={18} color={c.aurora} />
+                    </Pressable>
+                  )}
+                  <Ionicons name="chevron-forward" size={18} color={c.textFaint} />
+                </Pressable>
+              ))
             )}
 
             {/* Sauvegarde */}
@@ -230,6 +354,15 @@ export function SettingsModal({
                 </Pressable>
               </View>
             ))}
+
+            {/* Pied de page : le logo, discret */}
+            <View style={styles.about}>
+              <BakeLogo size={62} />
+              <Text style={styles.aboutName}>Bake</Text>
+              <Text style={styles.aboutLine}>
+                Tes habitudes, tes tâches et ton agenda — sur ce téléphone, et nulle part ailleurs.
+              </Text>
+            </View>
           </ScrollView>
         </SafeAreaView>
 
@@ -247,6 +380,13 @@ export function SettingsModal({
             onChange={(_e, d) => onPickTime(d)}
           />
         )}
+
+        <CalendarSubModal
+          visible={calModal}
+          calendar={editingCal}
+          onClose={() => setCalModal(false)}
+          onSaved={refresh}
+        />
 
         <CategoryEditModal
           visible={catModal}
@@ -294,6 +434,13 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.lg },
   hint: { fontSize: font.small, color: c.textMuted, marginBottom: spacing.sm, lineHeight: 19 },
   cardRow: { flexDirection: 'row', gap: spacing.md },
+  themeRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    backgroundColor: c.surface, borderWidth: 1, borderColor: c.glassBorder,
+    borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+  },
+  themeIcon: { width: 20 },
+  themePicker: { flex: 1 },
   remindRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     backgroundColor: c.surface, borderWidth: 1, borderColor: c.glassBorder,
@@ -326,5 +473,18 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   catIcon: { width: 36, height: 36, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
   catName: { flex: 1, fontSize: font.body, color: c.text, fontWeight: '600' },
   catAction: { padding: spacing.xs },
+  emptyLine: { fontSize: font.small, color: c.textFaint, paddingVertical: spacing.xs },
+  calRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    backgroundColor: c.surface, borderWidth: 1, borderColor: c.glassBorder,
+    borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+  },
+  calDot: { width: 14, height: 14, borderRadius: 7 },
+  calTexts: { flex: 1 },
+  calName: { fontSize: font.body, color: c.text, fontWeight: '600' },
+  calMeta: { fontSize: font.tiny, color: c.textMuted, marginTop: 1 },
+  about: { alignItems: 'center', gap: spacing.sm, marginTop: spacing.xl, paddingHorizontal: spacing.lg },
+  aboutName: { fontSize: font.heading, fontWeight: '700', color: c.text },
+  aboutLine: { fontSize: font.small, color: c.textMuted, textAlign: 'center', lineHeight: 19 },
   busy: { ...StyleSheet.absoluteFillObject, backgroundColor: '#0007', alignItems: 'center', justifyContent: 'center' },
 });

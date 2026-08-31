@@ -77,6 +77,23 @@ export function monthGrid(key: string): string[] {
   return Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
 }
 
+/**
+ * Les semaines à afficher pour le mois de `key` : des tableaux de 7 clés jour
+ * (lundi → dimanche). Contrairement à `monthGrid`, on ne garde que les semaines
+ * qui touchent réellement le mois — 4, 5 ou 6 lignes selon le mois, comme le
+ * calendrier iOS, plutôt que 6 lignes systématiques dont une vide.
+ */
+export function monthWeeks(key: string): string[][] {
+  const cells = monthGrid(key);
+  const weeks: string[][] = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  // On retire par la fin les semaines entièrement hors du mois affiché.
+  while (weeks.length > 4 && weeks[weeks.length - 1].every((d) => !isSameMonth(d, key))) {
+    weeks.pop();
+  }
+  return weeks;
+}
+
 /** Vrai si la clé appartient au même mois/année que `ref`. */
 export function isSameMonth(key: string, ref: string): boolean {
   return key.slice(0, 7) === ref.slice(0, 7);
@@ -109,4 +126,23 @@ export function labelMonth(key: string): string {
 export function labelDayShort(key: string): string {
   const d = fromDayKey(key);
   return `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 4)}.`;
+}
+
+// --- Heures ---------------------------------------------------------------
+
+/** Convertit une heure "HH:MM" en minutes depuis minuit (08:30 → 510). */
+export function minutesOfTime(time: string): number {
+  const [h, m] = time.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+/** Les minutes écoulées depuis minuit à l'instant présent. */
+export function nowMinutes(): number {
+  const d = new Date();
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+/** Le libellé d'une heure pleine dans la colonne du planning : 8 → "08:00". */
+export function labelHour(hour: number): string {
+  return `${String(hour).padStart(2, '0')}:00`;
 }

@@ -2,15 +2,33 @@
  * theme.ts — la charte graphique iOS, en CLAIR et SOMBRE (auto).
  *
  * Deux palettes aux MÊMES clés : `lightColors` et `darkColors`. Le hook `useC()`
- * renvoie celle qui correspond au réglage du système (et suit les changements
- * en direct). Les composants lisent leurs couleurs via `useC()` — plus aucune
- * couleur figée dans les écrans.
+ * renvoie celle qui correspond à l'apparence ACTIVE. Les composants lisent leurs
+ * couleurs via `useC()` — plus aucune couleur figée dans les écrans.
+ *
+ * L'apparence vient de `ThemeProvider` (posé autour de toute l'app dans
+ * `App.tsx`) : soit le réglage choisi dans les Réglages — clair ou sombre —,
+ * soit celle du téléphone quand le mode vaut `'system'` (le défaut), auquel cas
+ * elle suit les changements en direct. Sans provider (test isolé), on retombe
+ * simplement sur le téléphone.
  *
  * Esthétique : iOS « grouped » — fond gris/noir système, cartes encartées,
  * séparateurs fins, une seule teinte d'accent (vert nature).
  */
 
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useColorScheme } from 'react-native';
+
+import { getThemeMode, saveThemeMode, type ThemeMode } from '@/lib/themeMode';
+
+export type { ThemeMode };
 
 export type Palette = {
   bg: string; // fond général (systemGroupedBackground)
@@ -95,12 +113,57 @@ export const darkColors: Palette = {
   white: '#FFFFFF',
 };
 
+/** Ce que le contexte d'apparence expose à toute l'app. */
+type ThemeCtx = {
+  mode: ThemeMode; // le choix de l'utilisateur
+  dark: boolean; // l'apparence qui en découle réellement
+  setMode: (mode: ThemeMode) => void; // change le choix ET l'enregistre
+};
+
+const ThemeContext = createContext<ThemeCtx | null>(null);
+
 /**
- * Le hook de thème : renvoie la palette active (clair/sombre) selon le système.
- * Se met à jour tout seul quand l'utilisateur change de mode.
+ * Pose l'apparence pour toute l'app. À monter au-dessus de la navigation, et
+ * APRÈS `initDatabase()` : le mode choisi est lu en base dès le premier rendu.
+ */
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const system = useColorScheme();
+  const [mode, setModeState] = useState<ThemeMode>(() => getThemeMode());
+
+  const setMode = useCallback((next: ThemeMode) => {
+    setModeState(next);
+    saveThemeMode(next);
+  }, []);
+
+  const value = useMemo<ThemeCtx>(
+    () => ({
+      mode,
+      // 'system' : on suit le téléphone ; sinon le choix de l'utilisateur gagne.
+      dark: mode === 'system' ? system === 'dark' : mode === 'dark',
+      setMode,
+    }),
+    [mode, system, setMode],
+  );
+
+  return createElement(ThemeContext.Provider, { value }, children);
+}
+
+/**
+ * Le mode choisi et de quoi en changer — pour l'écran Réglages.
+ * Hors provider, on renvoie un contexte inerte plutôt que de planter.
+ */
+export function useThemeMode(): ThemeCtx {
+  const ctx = useContext(ThemeContext);
+  const system = useColorScheme();
+  return ctx ?? { mode: 'system', dark: system === 'dark', setMode: () => {} };
+}
+
+/**
+ * Le hook de thème : renvoie la palette active (clair/sombre).
+ * Se met à jour tout seul quand l'apparence change, réglage ou téléphone.
  */
 export function useC(): Palette {
-  return useColorScheme() === 'dark' ? darkColors : lightColors;
+  return useIsDark() ? darkColors : lightColors;
 }
 
 /**
@@ -151,3 +214,22 @@ export const softShadow = {
 
 /** Alias : même ombre discrète (plus de lueur néon). */
 export const glow = softShadow;
+
+/** Vrai quand l'apparence active est sombre (pour les nuances calculées). */
+export function useIsDark(): boolean {
+  return useThemeMode().dark;
+}
+
+/**
+ * Une couleur `#RRGGBB` (celle d'une catégorie) rendue translucide.
+ * Sert aux blocs du planning : fond teinté dans la couleur de l'événement.
+ * Une valeur non hexadécimale est renvoyée telle quelle (pas de crash).
+ */
+export function withAlpha(color: string, alpha: number): string {
+  const hex = color.trim();
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return color;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
