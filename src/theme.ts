@@ -11,8 +11,12 @@
  * elle suit les changements en direct. Sans provider (test isolé), on retombe
  * simplement sur le téléphone.
  *
+ * La teinte d'ACCENT (vert nature ou orange du logo) est un second réglage,
+ * indépendant du clair/sombre : `ACCENT_OVERRIDES` ne remplace que les quelques
+ * clés colorées de la palette, le reste (fonds, textes) ne bouge pas.
+ *
  * Esthétique : iOS « grouped » — fond gris/noir système, cartes encartées,
- * séparateurs fins, une seule teinte d'accent (vert nature).
+ * séparateurs fins, une seule teinte d'accent.
  */
 
 import {
@@ -26,9 +30,10 @@ import {
 } from 'react';
 import { useColorScheme } from 'react-native';
 
+import { getAccent, saveAccent, type Accent } from '@/lib/accent';
 import { getThemeMode, saveThemeMode, type ThemeMode } from '@/lib/themeMode';
 
-export type { ThemeMode };
+export type { Accent, ThemeMode };
 
 export type Palette = {
   bg: string; // fond général (systemGroupedBackground)
@@ -113,11 +118,58 @@ export const darkColors: Palette = {
   white: '#FFFFFF',
 };
 
+/** Les clés de la palette qui portent la teinte d'accent. */
+type AccentKeys = Pick<
+  Palette,
+  'primary' | 'primaryDark' | 'primarySoft' | 'aurora' | 'aurora2' | 'textOnAurora'
+>;
+
+/**
+ * Ce que chaque teinte change dans la palette. Le vert n'a rien à dire : c'est
+ * la teinte déjà écrite dans `lightColors` / `darkColors`.
+ */
+const ACCENT_OVERRIDES: Record<Accent, { light: Partial<AccentKeys>; dark: Partial<AccentKeys> }> = {
+  green: { light: {}, dark: {} },
+  orange: {
+    light: {
+      primary: '#B9701A',
+      primaryDark: '#8C5210',
+      primarySoft: 'rgba(185,112,26,0.14)',
+      aurora: '#B9701A',
+      aurora2: '#E8B45E',
+      textOnAurora: '#FFFFFF',
+    },
+    dark: {
+      primary: '#F0A94B',
+      primaryDark: '#A86A22',
+      primarySoft: 'rgba(240,169,75,0.18)',
+      aurora: '#F0A94B',
+      aurora2: '#F2C574',
+      textOnAurora: '#1A0F03',
+    },
+  },
+};
+
+/**
+ * Les quatre palettes possibles (2 apparences × 2 teintes), calculées une fois
+ * pour toutes : `useC()` renvoie ainsi toujours le MÊME objet, sans re-rendu
+ * inutile des composants qui en dépendent.
+ */
+const PALETTES: Record<Accent, { light: Palette; dark: Palette }> = {
+  green: { light: lightColors, dark: darkColors },
+  orange: {
+    light: { ...lightColors, ...ACCENT_OVERRIDES.orange.light },
+    dark: { ...darkColors, ...ACCENT_OVERRIDES.orange.dark },
+  },
+};
+
 /** Ce que le contexte d'apparence expose à toute l'app. */
 type ThemeCtx = {
   mode: ThemeMode; // le choix de l'utilisateur
   dark: boolean; // l'apparence qui en découle réellement
   setMode: (mode: ThemeMode) => void; // change le choix ET l'enregistre
+  accent: Accent; // la teinte d'accent choisie
+  setAccent: (accent: Accent) => void; // change la teinte ET l'enregistre
 };
 
 const ThemeContext = createContext<ThemeCtx | null>(null);
@@ -129,10 +181,16 @@ const ThemeContext = createContext<ThemeCtx | null>(null);
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const system = useColorScheme();
   const [mode, setModeState] = useState<ThemeMode>(() => getThemeMode());
+  const [accent, setAccentState] = useState<Accent>(() => getAccent());
 
   const setMode = useCallback((next: ThemeMode) => {
     setModeState(next);
     saveThemeMode(next);
+  }, []);
+
+  const setAccent = useCallback((next: Accent) => {
+    setAccentState(next);
+    saveAccent(next);
   }, []);
 
   const value = useMemo<ThemeCtx>(
@@ -141,8 +199,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       // 'system' : on suit le téléphone ; sinon le choix de l'utilisateur gagne.
       dark: mode === 'system' ? system === 'dark' : mode === 'dark',
       setMode,
+      accent,
+      setAccent,
     }),
-    [mode, system, setMode],
+    [mode, system, setMode, accent, setAccent],
   );
 
   return createElement(ThemeContext.Provider, { value }, children);
@@ -155,15 +215,24 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 export function useThemeMode(): ThemeCtx {
   const ctx = useContext(ThemeContext);
   const system = useColorScheme();
-  return ctx ?? { mode: 'system', dark: system === 'dark', setMode: () => {} };
+  return (
+    ctx ?? {
+      mode: 'system',
+      dark: system === 'dark',
+      setMode: () => {},
+      accent: 'green',
+      setAccent: () => {},
+    }
+  );
 }
 
 /**
- * Le hook de thème : renvoie la palette active (clair/sombre).
+ * Le hook de thème : renvoie la palette active (clair/sombre × vert/orange).
  * Se met à jour tout seul quand l'apparence change, réglage ou téléphone.
  */
 export function useC(): Palette {
-  return useIsDark() ? darkColors : lightColors;
+  const { dark, accent } = useThemeMode();
+  return PALETTES[accent][dark ? 'dark' : 'light'];
 }
 
 /**
@@ -178,7 +247,10 @@ export const habitPalette: string[] = [
   '#8E85F0', '#54B39A', '#6E9BE8', '#E0906A',
 ];
 
-/** Dégradés d'accent (anneaux, graphiques) — valables clair/sombre. */
+/**
+ * Dégradés fixes (fond de l'écran Méditer, braises). Les dégradés d'ACCENT, eux,
+ * se lisent dans la palette active : `[c.aurora, c.aurora2]` (voir `useAccentPair`).
+ */
 export const gradients = {
   aurora: ['#34C98A', '#46B6C8'] as const,
   auroraViolet: ['#34C98A', '#8E85F0'] as const,
@@ -214,6 +286,12 @@ export const softShadow = {
 
 /** Alias : même ombre discrète (plus de lueur néon). */
 export const glow = softShadow;
+
+/** Le dégradé d'accent courant — suit la teinte choisie (vert ou orange). */
+export function useAccentPair(): readonly [string, string] {
+  const c = useC();
+  return [c.aurora, c.aurora2] as const;
+}
 
 /** Vrai quand l'apparence active est sombre (pour les nuances calculées). */
 export function useIsDark(): boolean {

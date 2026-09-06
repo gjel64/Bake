@@ -47,6 +47,7 @@ export type Habit = {
   description: string;
   color: string;
   created_at: string; // "YYYY-MM-DD"
+  notify: number; // 1 = citée dans le rappel quotidien, 0 = ignorée
 };
 
 export type EventItem = {
@@ -121,7 +122,8 @@ export function initDatabase(): void {
       name        TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       color       TEXT NOT NULL,
-      created_at  TEXT NOT NULL
+      created_at  TEXT NOT NULL,
+      notify      INTEGER NOT NULL DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS completions (
@@ -196,6 +198,9 @@ export function initDatabase(): void {
 
   // V4 → V5 : un événement peut venir d'un abonnement .ics.
   ensureColumn('events', 'calendar_id', 'calendar_id INTEGER');
+
+  // V5 → V6 : chaque habitude dit si elle est citée dans le rappel quotidien.
+  ensureColumn('habits', 'notify', 'notify INTEGER NOT NULL DEFAULT 1');
 
   // V2 → V3 : le lien unique events.todo_id devient la table event_todos.
   migrateEventTodoLinks();
@@ -281,6 +286,16 @@ export function getPendingHabits(): Habit[] {
 /** Toutes les habitudes, quel que soit leur état (utile pour un total). */
 export function getAllHabits(): Habit[] {
   return db.getAllSync<Habit>('SELECT * FROM habits ORDER BY id ASC');
+}
+
+/** Les habitudes à citer dans le rappel quotidien (celles cochées dans les réglages). */
+export function getNotifiedHabits(): Habit[] {
+  return db.getAllSync<Habit>('SELECT * FROM habits WHERE notify = 1 ORDER BY id ASC');
+}
+
+/** Coche / décoche une habitude dans le rappel quotidien. */
+export function setHabitNotify(habitId: number, notify: boolean): void {
+  db.runSync('UPDATE habits SET notify = ? WHERE id = ?', notify ? 1 : 0, habitId);
 }
 
 /** Combien d'habitudes ont déjà été validées aujourd'hui. */
@@ -955,6 +970,9 @@ export const SETTING_HABITS_REMINDER_TIME = 'habits_reminder_time';
 /** Apparence forcée : "light" ou "dark" (absent = on suit le téléphone). */
 export const SETTING_THEME_MODE = 'theme_mode';
 
+/** Teinte d'accent : "orange" (absent = vert, la couleur d'origine). */
+export const SETTING_ACCENT = 'accent';
+
 /** Lit un réglage, ou null s'il n'a jamais été posé. */
 export function getSetting(key: string): string | null {
   const row = db.getFirstSync<{ value: string }>(
@@ -982,8 +1000,8 @@ export function setSetting(key: string, value: string | null): void {
 //  EXPORT / IMPORT (sauvegarde anti-réinstallation)
 // ===========================================================================
 
-/** Version du format d'export (5 = abonnements .ics). */
-export const BACKUP_VERSION = 5;
+/** Version du format d'export (6 = habitudes citées dans le rappel). */
+export const BACKUP_VERSION = 6;
 
 type Backup = {
   version: number;

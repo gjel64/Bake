@@ -3,19 +3,20 @@
  */
 
 import { StyleSheet, Text, View } from 'react-native';
-import { font, gradients, spacing, useC } from '@/theme';
+import { font, spacing, useC } from '@/theme';
 
 export type HeatCell = { day: string; intensity: number; inRange: boolean };
 
 type Props = {
   weeks: HeatCell[][]; // chaque semaine = 7 cases (lundi → dimanche)
-  tint?: string;
+  tint?: string; // par défaut : la teinte d'accent courante
 };
 
 const ROWS = ['L', '', 'M', '', 'J', '', 'D'];
 
-export function Heatmap({ weeks, tint = gradients.aurora[0] }: Props) {
+export function Heatmap({ weeks, tint }: Props) {
   const c = useC();
+  const color = tint ?? c.aurora;
   return (
     <View style={styles.row}>
       <View style={styles.rowLabels}>
@@ -36,7 +37,7 @@ export function Heatmap({ weeks, tint = gradients.aurora[0] }: Props) {
                       ? 'transparent'
                       : cell.intensity <= 0
                         ? c.surfaceAlt
-                        : tint,
+                        : color,
                     opacity: !cell.inRange ? 0 : cell.intensity <= 0 ? 1 : 0.28 + 0.72 * cell.intensity,
                   },
                 ]}

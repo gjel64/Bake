@@ -4,18 +4,20 @@
 
 import { StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { font, gradients, radius, spacing, useC } from '@/theme';
+import { font, radius, spacing, useAccentPair, useC } from '@/theme';
 
 export type BarDatum = { label: string; value: number };
 
 type Props = {
   data: BarDatum[];
   height?: number;
-  colorsPair?: readonly [string, string];
+  colorsPair?: readonly [string, string]; // par défaut : le dégradé d'accent courant
 };
 
-export function MiniBars({ data, height = 120, colorsPair = gradients.aurora }: Props) {
+export function MiniBars({ data, height = 120, colorsPair }: Props) {
   const c = useC();
+  const pair = useAccentPair();
+  const colors = colorsPair ?? pair;
   const max = Math.max(...data.map((d) => d.value), 1);
 
   return (
@@ -28,7 +30,7 @@ export function MiniBars({ data, height = 120, colorsPair = gradients.aurora }: 
             <View key={i} style={styles.col}>
               <View style={[styles.track, { height, backgroundColor: c.surfaceAlt }]} />
               <LinearGradient
-                colors={active ? colorsPair : [c.surfaceAlt, c.surfaceAlt]}
+                colors={active ? colors : [c.surfaceAlt, c.surfaceAlt]}
                 start={{ x: 0, y: 1 }}
                 end={{ x: 0, y: 0 }}
                 style={[styles.bar, { height: barH }]}

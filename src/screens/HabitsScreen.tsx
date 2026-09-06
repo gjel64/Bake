@@ -37,6 +37,7 @@ import {
   getAllHabits,
   getPendingHabits,
 } from '@/db/database';
+import { syncHabitsReminder } from '@/lib/habitsReminder';
 import { font, radius, spacing, useC, type Palette } from '@/theme';
 
 // Sur Android, les animations de layout automatiques doivent être activées.
@@ -81,6 +82,9 @@ export function HabitsScreen() {
 
   function onAdd(name: string, description: string, color: string) {
     addHabit(name, description, color);
+    // La nouvelle habitude est rappelée par défaut : le texte de la notification
+    // quotidienne, figé à la programmation, doit être réécrit.
+    void syncHabitsReminder();
     refresh();
   }
 

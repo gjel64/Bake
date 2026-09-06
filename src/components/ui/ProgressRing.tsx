@@ -6,7 +6,7 @@
 import { ReactNode, useEffect, useRef } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
 import Svg, { Circle, Defs, LinearGradient, Stop } from 'react-native-svg';
-import { gradients, useC } from '@/theme';
+import { useAccentPair, useC } from '@/theme';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
@@ -14,7 +14,7 @@ type Props = {
   progress: number; // 0 à 1
   size?: number;
   strokeWidth?: number;
-  colorsPair?: readonly [string, string];
+  colorsPair?: readonly [string, string]; // par défaut : le dégradé d'accent courant
   children?: ReactNode;
 };
 
@@ -22,10 +22,12 @@ export function ProgressRing({
   progress,
   size = 180,
   strokeWidth = 14,
-  colorsPair = gradients.aurora,
+  colorsPair,
   children,
 }: Props) {
   const c = useC();
+  const pair = useAccentPair();
+  const colors = colorsPair ?? pair;
   const r = (size - strokeWidth) / 2;
   const circ = 2 * Math.PI * r;
   const center = size / 2;
@@ -47,8 +49,8 @@ export function ProgressRing({
       <Svg width={size} height={size}>
         <Defs>
           <LinearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor={colorsPair[0]} />
-            <Stop offset="1" stopColor={colorsPair[1]} />
+            <Stop offset="0" stopColor={colors[0]} />
+            <Stop offset="1" stopColor={colors[1]} />
           </LinearGradient>
         </Defs>
         <Circle cx={center} cy={center} r={r} stroke={c.surfaceAlt} strokeWidth={strokeWidth} fill="none" />

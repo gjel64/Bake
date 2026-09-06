@@ -39,7 +39,7 @@ import {
   todayKey,
   WEEKDAYS_SHORT,
 } from '@/lib/dates';
-import { font, gradients, spacing, useC, type Palette } from '@/theme';
+import { font, spacing, useC, type Palette } from '@/theme';
 
 // --- Petits utilitaires de mise en forme ---------------------------------
 
@@ -229,7 +229,7 @@ export function StatsScreen() {
                 </View>
 
                 <View style={styles.chartWrap}>
-                  <MiniBars data={s.medSeries} colorsPair={gradients.auroraViolet} />
+                  <MiniBars data={s.medSeries} colorsPair={[c.aurora, c.violet] as const} />
                   <Text style={styles.chartCaption}>7 derniers jours</Text>
                 </View>
               </GlassCard>
