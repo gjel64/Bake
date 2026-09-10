@@ -12,7 +12,7 @@
  * Schéma :
  *   habits(id, name, description, color, created_at)
  *   completions(id, habit_id, day)   -- une ligne = « habit validé ce jour-là »
- *   events(id, title, day, end_day, start, end, category_id, calendar_id, todo_id*)
+ *   events(id, title, day, end_day, start, end, category_id, calendar_id, location, todo_id*)
  *   event_todos(event_id, todo_id)   -- lien N..N entre événements et to-dos
  *   calendars(id, name, url, color)  -- abonnements .ics (agendas externes)
  *   settings(key, value)             -- réglages de l'app (clé → valeur texte)
@@ -34,7 +34,7 @@
  */
 
 import * as SQLite from 'expo-sqlite';
-import { addDays, todayKey } from '@/lib/dates';
+import { addDays, daysBetween, todayKey } from '@/lib/dates';
 
 // Ouverture (ou création) du fichier de base. Une seule instance partagée.
 const db = SQLite.openDatabaseSync('bake.db');
@@ -59,6 +59,7 @@ export type EventItem = {
   end: string; // "HH:MM" — heure de fin, le dernier jour
   category_id: number | null;
   calendar_id: number | null; // non nul = importé d'un abonnement .ics (lecture seule)
+  location: string; // lieu, renseigné seulement par les abonnements .ics ('' sinon)
   color: string | null; // couleur de la catégorie, sinon celle de l'abonnement
   todo_ids: number[]; // to-dos liés à cet événement (0, 1 ou plusieurs)
   todo_done: number; // combien de ces to-dos sont cochés
@@ -198,6 +199,9 @@ export function initDatabase(): void {
 
   // V4 → V5 : un événement peut venir d'un abonnement .ics.
   ensureColumn('events', 'calendar_id', 'calendar_id INTEGER');
+
+  // V6 → V7 : un événement importé peut porter un lieu (LOCATION du .ics).
+  ensureColumn('events', 'location', "location TEXT NOT NULL DEFAULT ''");
 
   // V5 → V6 : chaque habitude dit si elle est citée dans le rappel quotidien.
   ensureColumn('habits', 'notify', 'notify INTEGER NOT NULL DEFAULT 1');
@@ -362,6 +366,7 @@ export function daysUntilCanAddHabit(): number {
 const EVENT_SELECT = `
   SELECT e.id, e.title, e.day, COALESCE(e.end_day, e.day) AS end_day,
          e.start, e.end, e.category_id, e.calendar_id,
+         COALESCE(e.location, '') AS location,
          COALESCE(c.color, cal.color) AS color,
          (SELECT group_concat(et.todo_id)
             FROM event_todos et WHERE et.event_id = e.id) AS todo_ids_csv,
@@ -395,8 +400,9 @@ function mapEvent(row: EventRow): EventItem {
  * Les événements qui COUVRENT un jour donné, triés par heure de début.
  * Un événement sur plusieurs jours ressort donc chaque jour de sa plage ; les
  * jours où il ne fait que courir sont triés comme s'ils commençaient à minuit.
+ * `hidden` masque des SOURCES entières (voir `eventSourceKey`).
  */
-export function getEventsForDay(day: string): EventItem[] {
+export function getEventsForDay(day: string, hidden?: ReadonlySet<string>): EventItem[] {
   return db
     .getAllSync<EventRow>(
       `${EVENT_SELECT} WHERE ? BETWEEN e.day AND COALESCE(e.end_day, e.day)
@@ -404,14 +410,20 @@ export function getEventsForDay(day: string): EventItem[] {
       day,
       day,
     )
+    .filter((row) => !isHidden(row, hidden))
     .map(mapEvent);
 }
 
 /**
  * Les événements qui CHEVAUCHENT une plage de jours (bornes incluses).
  * Un événement long est renvoyé une seule fois, même s'il déborde des bornes.
+ * `hidden` masque des SOURCES entières (voir `eventSourceKey`).
  */
-export function getEventsInRange(startDay: string, endDay: string): EventItem[] {
+export function getEventsInRange(
+  startDay: string,
+  endDay: string,
+  hidden?: ReadonlySet<string>,
+): EventItem[] {
   return db
     .getAllSync<EventRow>(
       `${EVENT_SELECT} WHERE e.day <= ? AND COALESCE(e.end_day, e.day) >= ?
@@ -419,7 +431,67 @@ export function getEventsInRange(startDay: string, endDay: string): EventItem[] 
       endDay,
       startDay,
     )
+    .filter((row) => !isHidden(row, hidden))
     .map(mapEvent);
+}
+
+// --- Sources d'événements (ce que l'agenda peut masquer) ------------------
+
+/** Clé de la source « événement perso sans catégorie ». */
+export const NO_CATEGORY_SOURCE = 'none';
+
+/**
+ * La SOURCE d'un événement, sous forme de clé texte : son abonnement .ics s'il
+ * en vient, sinon sa catégorie, sinon `NO_CATEGORY_SOURCE`. C'est l'unité que
+ * l'agenda masque (voir `@/lib/agendaFilters`) — une clé plutôt qu'un id parce
+ * qu'un abonnement 3 et une catégorie 3 ne sont pas la même chose.
+ */
+export function eventSourceKey(ev: {
+  category_id: number | null;
+  calendar_id: number | null;
+}): string {
+  if (ev.calendar_id !== null) return `cal:${ev.calendar_id}`;
+  if (ev.category_id !== null) return `cat:${ev.category_id}`;
+  return NO_CATEGORY_SOURCE;
+}
+
+/** Vrai si la source de cette ligne fait partie des sources masquées. */
+function isHidden(
+  ev: { category_id: number | null; calendar_id: number | null },
+  hidden?: ReadonlySet<string>,
+): boolean {
+  return hidden !== undefined && hidden.size > 0 && hidden.has(eventSourceKey(ev));
+}
+
+/** Une source d'événements, telle que la liste le filtre de l'agenda. */
+export type EventSource = {
+  key: string; // la clé rendue par `eventSourceKey`
+  label: string; // nom de la catégorie ou de l'abonnement
+  color: string | null; // sa couleur (null pour « sans catégorie »)
+  kind: 'category' | 'calendar' | 'none';
+};
+
+/**
+ * Toutes les sources d'événements existantes : les catégories, les abonnements
+ * .ics, et la pseudo-source « sans catégorie ». C'est la liste que propose le
+ * filtre de l'agenda.
+ */
+export function getEventSources(): EventSource[] {
+  return [
+    ...getCategories().map<EventSource>((cat) => ({
+      key: eventSourceKey({ category_id: cat.id, calendar_id: null }),
+      label: cat.name,
+      color: cat.color,
+      kind: 'category',
+    })),
+    { key: NO_CATEGORY_SOURCE, label: 'Sans catégorie', color: null, kind: 'none' },
+    ...getCalendars().map<EventSource>((cal) => ({
+      key: eventSourceKey({ category_id: null, calendar_id: cal.id }),
+      label: cal.name,
+      color: cal.color,
+      kind: 'calendar',
+    })),
+  ];
 }
 
 /** Ce qu'il faut savoir d'un jour pour la grille du mois. */
@@ -431,13 +503,23 @@ export type DaySummary = {
 /** Le résumé de chaque jour occupé d'une plage : { "2026-07-06": { count, colors }, … }.
  *  Sert aux pastilles colorées de la vue mois et de la bande semaine.
  *  Un événement sur plusieurs jours compte pour CHAQUE jour qu'il couvre :
- *  impossible à faire en SQL simple, on déplie donc la plage en JS. */
+ *  impossible à faire en SQL simple, on déplie donc la plage en JS.
+ *  `hidden` masque des SOURCES entières (voir `eventSourceKey`) : une pastille
+ *  ne doit pas trahir un événement que la vue ne montre pas. */
 export function getEventDaysInRange(
   startDay: string,
   endDay: string,
+  hidden?: ReadonlySet<string>,
 ): Record<string, DaySummary> {
-  const rows = db.getAllSync<{ day: string; end_day: string; color: string | null }>(
+  const rows = db.getAllSync<{
+    day: string;
+    end_day: string;
+    color: string | null;
+    category_id: number | null;
+    calendar_id: number | null;
+  }>(
     `SELECT e.day, COALESCE(e.end_day, e.day) AS end_day,
+            e.category_id, e.calendar_id,
             COALESCE(c.color, cal.color) AS color
        FROM events e
        LEFT JOIN categories c ON c.id = e.category_id
@@ -449,6 +531,7 @@ export function getEventDaysInRange(
   );
   const map: Record<string, DaySummary> = {};
   for (const r of rows) {
+    if (isHidden(r, hidden)) continue;
     // On borne la plage de l'événement à celle demandée avant de la déplier.
     let d = r.day < startDay ? startDay : r.day;
     const last = r.end_day > endDay ? endDay : r.end_day;
@@ -561,6 +644,7 @@ export type ImportedEvent = {
   end_day: string;
   start: string; // "HH:MM"
   end: string;
+  location: string; // lieu (LOCATION), '' si absent du fichier
 };
 
 /** Les abonnements, du plus ancien au plus récent. */
@@ -615,14 +699,15 @@ export function replaceCalendarEvents(id: number, events: ImportedEvent[]): void
     db.runSync('DELETE FROM events WHERE calendar_id = ?', id);
     for (const e of events) {
       db.runSync(
-        `INSERT INTO events (title, day, end_day, start, end, category_id, calendar_id)
-         VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+        `INSERT INTO events (title, day, end_day, start, end, category_id, calendar_id, location)
+         VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
         e.title,
         e.day,
         e.end_day < e.day ? e.day : e.end_day,
         e.start,
         e.end,
         id,
+        e.location,
       );
     }
     db.runSync('UPDATE calendars SET last_sync = ? WHERE id = ?', localStamp(), id);
@@ -728,6 +813,78 @@ export function getHabitStreak(): number {
     cursor = addDays(cursor, -1);
   }
   return streak;
+}
+
+/** Le détail d'UNE habitude sur la page Stats. */
+export type HabitStat = {
+  id: number;
+  name: string;
+  color: string;
+  week: boolean[]; // les 7 derniers jours, le dernier étant aujourd'hui
+  rate: number; // 0..1 sur les 30 derniers jours (voir plus bas)
+  window: number; // sur combien de jours ce taux est calculé (≤ 30)
+  streak: number; // jours consécutifs validés, même tolérance que `getHabitStreak`
+  total: number; // validations depuis la création
+};
+
+/**
+ * Le détail de CHAQUE habitude : sa semaine, son taux, sa série, son total.
+ * Le taux global de la page cache l'habitude qu'on laisse filer — c'est ce
+ * tableau qui le dit.
+ *
+ * Le taux est borné à l'ÂGE de l'habitude : une habitude créée avant-hier
+ * afficherait sinon 7 % pour deux jours parfaits. `window` dit sur combien de
+ * jours il porte réellement, pour que l'écran puisse le nuancer.
+ *
+ * Une seule requête, dépliée en JS : les volumes sont minuscules (usage perso)
+ * et la série, elle, peut remonter bien au-delà de la fenêtre de 30 jours.
+ */
+export function getHabitStats(): HabitStat[] {
+  const today = todayKey();
+  const rows = db.getAllSync<{ habit_id: number; day: string }>(
+    'SELECT DISTINCT habit_id, day FROM completions',
+  );
+  const byHabit = new Map<number, Set<string>>();
+  for (const r of rows) {
+    const days = byHabit.get(r.habit_id) ?? new Set<string>();
+    days.add(r.day);
+    byHabit.set(r.habit_id, days);
+  }
+
+  return getAllHabits().map((habit) => {
+    const done = byHabit.get(habit.id) ?? new Set<string>();
+
+    // Les sept derniers jours, du plus ancien à aujourd'hui.
+    const week = Array.from({ length: 7 }, (_, i) => done.has(addDays(today, i - 6)));
+
+    // Taux sur 30 jours, jamais plus large que l'âge de l'habitude.
+    const age = daysBetween(habit.created_at, today) + 1;
+    const window = Math.max(1, Math.min(30, age));
+    let hits = 0;
+    for (let i = 0; i < window; i += 1) {
+      if (done.has(addDays(today, -i))) hits += 1;
+    }
+
+    // Série : on part d'aujourd'hui s'il est validé, sinon d'hier — la journée
+    // en cours ne doit pas casser une série tant qu'elle n'est pas finie.
+    let cursor = done.has(today) ? today : addDays(today, -1);
+    let streak = 0;
+    while (done.has(cursor)) {
+      streak += 1;
+      cursor = addDays(cursor, -1);
+    }
+
+    return {
+      id: habit.id,
+      name: habit.name,
+      color: habit.color,
+      week,
+      rate: hits / window,
+      window,
+      streak,
+      total: done.size,
+    };
+  });
 }
 
 /** Total de secondes méditées, tous jours confondus. */
@@ -973,6 +1130,9 @@ export const SETTING_THEME_MODE = 'theme_mode';
 /** Teinte d'accent : "orange" (absent = vert, la couleur d'origine). */
 export const SETTING_ACCENT = 'accent';
 
+/** Préfixe des sources masquées dans l'agenda, une clé par vue (`@/lib/agendaFilters`). */
+export const SETTING_AGENDA_HIDDEN = 'agenda_hidden';
+
 /** Lit un réglage, ou null s'il n'a jamais été posé. */
 export function getSetting(key: string): string | null {
   const row = db.getFirstSync<{ value: string }>(
@@ -1000,8 +1160,8 @@ export function setSetting(key: string, value: string | null): void {
 //  EXPORT / IMPORT (sauvegarde anti-réinstallation)
 // ===========================================================================
 
-/** Version du format d'export (6 = habitudes citées dans le rappel). */
-export const BACKUP_VERSION = 6;
+/** Version du format d'export (7 = lieu des événements importés). */
+export const BACKUP_VERSION = 7;
 
 type Backup = {
   version: number;

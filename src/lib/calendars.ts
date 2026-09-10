@@ -10,8 +10,9 @@
  * abonnement injoignable laisse simplement en place les événements de la
  * dernière synchronisation réussie.
  *
- * La synchronisation est rejouée au démarrage de l'app (`App.tsx`) et à la
- * demande depuis les Réglages ; il n'y a pas de tâche de fond.
+ * La synchronisation est rejouée à chaque retour sur l'agenda — au plus une
+ * fois toutes les `MIN_INTERVAL_MS` — et à la demande depuis les Réglages ; il
+ * n'y a pas de tâche de fond.
  */
 
 import {
@@ -24,6 +25,12 @@ import { parseIcs } from '@/lib/ics';
 
 /** Abandon d'un téléchargement qui traîne (ms). */
 const TIMEOUT_MS = 20_000;
+
+/** Intervalle minimal entre deux synchronisations automatiques (ms). */
+const MIN_INTERVAL_MS = 5 * 60_000;
+
+/** Horodatage de la dernière synchronisation automatique (0 = jamais). */
+let lastAutoSync = 0;
 
 /** Le résultat d'une synchronisation, à montrer dans les Réglages. */
 export type SyncResult =
@@ -58,7 +65,13 @@ export async function fetchIcs(url: string): Promise<FetchResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(target, { signal: controller.signal });
+    // `no-cache` est ESSENTIEL : sans lui, le cache HTTP du téléphone peut
+    // resservir le fichier de la veille — un événement supprimé à la source
+    // resterait alors affiché, sans qu'aucune erreur ne le laisse deviner.
+    const res = await fetch(target, {
+      signal: controller.signal,
+      headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+    });
     if (!res.ok) return { ok: false, error: `Le serveur a répondu ${res.status}.` };
 
     const text = await res.text();
@@ -87,11 +100,17 @@ export async function syncCalendar(cal: CalendarSub): Promise<SyncResult> {
 
 /**
  * Synchronise tous les abonnements, en parallèle et sans bruit : c'est ce qu'on
- * lance au démarrage. Renvoie le nombre d'abonnements remis à jour.
+ * lance en ouvrant l'agenda. Renvoie le nombre d'abonnements remis à jour.
+ *
+ * Un garde-fou de `MIN_INTERVAL_MS` évite de retélécharger à chaque aller-retour
+ * entre les onglets ; `force` le contourne (bouton « rafraîchir » des Réglages).
  */
-export async function syncAllCalendars(): Promise<number> {
+export async function syncAllCalendars(force = false): Promise<number> {
   const cals = getCalendars();
   if (cals.length === 0) return 0;
+  if (!force && Date.now() - lastAutoSync < MIN_INTERVAL_MS) return 0;
+  lastAutoSync = Date.now();
+
   const results = await Promise.all(cals.map((cal) => syncCalendar(cal)));
   return results.filter((r) => r.ok).length;
 }

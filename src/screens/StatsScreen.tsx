@@ -4,6 +4,9 @@
  * Tout est lu depuis la base au moment où l'onglet devient visible, puis mis
  * en forme par les composants « ui » (anneau, histogramme, heatmap). Les
  * sections apparaissent en cascade (animations d'entrée Reanimated).
+ *
+ * L'anneau donne la vue d'ensemble, la section « Par habitude » donne le
+ * détail : le taux global cache toujours l'habitude qu'on laisse filer.
  */
 
 import { useCallback, useState } from 'react';
@@ -22,9 +25,11 @@ import { AnimatedCount } from '@/components/ui/AnimatedCount';
 import { MiniBars, BarDatum } from '@/components/ui/MiniBars';
 import { Heatmap, HeatCell } from '@/components/ui/Heatmap';
 import {
+  HabitStat,
   countCompletedToday,
   getAllHabits,
   getCompletionCountsInRange,
+  getHabitStats,
   getHabitStreak,
   getLongestMeditationSeconds,
   getMeditationSecondsInRange,
@@ -40,6 +45,10 @@ import {
   WEEKDAYS_SHORT,
 } from '@/lib/dates';
 import { font, spacing, useC, type Palette } from '@/theme';
+
+/** Pas d'un carré de jour (détail par habitude) et écart entre deux carrés. */
+const HABIT_CELL = 18;
+const HABIT_GAP = 4;
 
 // --- Petits utilitaires de mise en forme ---------------------------------
 
@@ -60,6 +69,12 @@ function clamp01(x: number): number {
   return Math.max(0, Math.min(1, x));
 }
 
+/** Les lettres des 7 derniers jours (le dernier étant aujourd'hui). */
+function lastSevenLetters(): string[] {
+  const today = todayKey();
+  return Array.from({ length: 7 }, (_, i) => weekdayLetter(addDays(today, i - 6)));
+}
+
 // --- Forme des données affichées -----------------------------------------
 
 type Stats = {
@@ -74,6 +89,7 @@ type Stats = {
   medLongestSec: number;
   medSeries: BarDatum[]; // 7 derniers jours
   heatWeeks: HeatCell[][]; // 5 semaines
+  habits: HabitStat[]; // le détail, habitude par habitude
 };
 
 /** Rassemble toutes les statistiques depuis la base. */
@@ -135,6 +151,7 @@ function computeStats(): Stats {
     medLongestSec: getLongestMeditationSeconds(),
     medSeries,
     heatWeeks,
+    habits: getHabitStats(),
   };
 }
 
@@ -207,8 +224,44 @@ export function StatsScreen() {
               </GlassCard>
             </Animated.View>
 
-            {/* 3. Méditation */}
-            <Animated.View entering={FadeInDown.delay(180).duration(500)}>
+            {/* 3. Le détail, habitude par habitude */}
+            {s.habits.length > 0 && (
+              <Animated.View entering={FadeInDown.delay(180).duration(500)}>
+                <GlassCard style={styles.section}>
+                  <View style={styles.sectionHead}>
+                    <Ionicons name="leaf-outline" size={20} color={c.aurora} />
+                    <Text style={styles.sectionTitle}>Par habitude</Text>
+                  </View>
+
+                  {/* Un seul conteneur : le `gap` de la carte ne doit pas
+                      s'insérer entre les lignes, elles ont leur séparateur. */}
+                  <View>
+                    {/* Les lettres des sept jours, alignées sur les carrés en dessous */}
+                    <View style={styles.habitHeadRow}>
+                      <View style={styles.habitWeek}>
+                        {lastSevenLetters().map((letter, i) => (
+                          <Text key={i} style={styles.habitHeadLetter}>
+                            {letter}
+                          </Text>
+                        ))}
+                      </View>
+                      <Text style={styles.habitHeadRate}>30 j</Text>
+                    </View>
+
+                    {s.habits.map((habit) => (
+                      <HabitRow key={habit.id} habit={habit} />
+                    ))}
+                  </View>
+
+                  <Text style={styles.legend}>
+                    carrés : les sept derniers jours · % : sur 30 jours, ou depuis la création
+                  </Text>
+                </GlassCard>
+              </Animated.View>
+            )}
+
+            {/* 4. Méditation */}
+            <Animated.View entering={FadeInDown.delay(270).duration(500)}>
               <GlassCard style={styles.section}>
                 <View style={styles.sectionHead}>
                   <Ionicons name="flower-outline" size={20} color={c.aurora} />
@@ -235,8 +288,8 @@ export function StatsScreen() {
               </GlassCard>
             </Animated.View>
 
-            {/* 4. Heatmap d'activité */}
-            <Animated.View entering={FadeInDown.delay(270).duration(500)}>
+            {/* 5. Heatmap d'activité */}
+            <Animated.View entering={FadeInDown.delay(360).duration(500)}>
               <GlassCard style={styles.section}>
                 <View style={styles.sectionHead}>
                   <Ionicons name="grid-outline" size={20} color={c.aurora2} />
@@ -250,6 +303,52 @@ export function StatsScreen() {
         )}
       </SafeAreaView>
     </ScreenBackground>
+  );
+}
+
+/**
+ * Une habitude : son nom, ses sept derniers jours en carrés, son taux sur
+ * 30 jours et sa série en cours. Les carrés prennent la COULEUR de l'habitude,
+ * pour qu'on la retrouve d'un coup d'œil depuis l'onglet Habitudes.
+ */
+function HabitRow({ habit }: { habit: HabitStat }) {
+  const c = useC();
+  const styles = makeStyles(c);
+  return (
+    <View style={styles.habitRow}>
+      <View style={[styles.habitDot, { backgroundColor: habit.color }]} />
+
+      <View style={styles.habitMain}>
+        <Text style={styles.habitName} numberOfLines={1}>
+          {habit.name}
+        </Text>
+        <View style={styles.habitBottom}>
+          <View style={styles.habitWeek}>
+            {habit.week.map((done, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.habitCell,
+                  { backgroundColor: done ? habit.color : c.surfaceAlt },
+                ]}
+              />
+            ))}
+          </View>
+          {habit.streak > 0 && (
+            <View style={styles.habitStreak}>
+              <Ionicons name="flame" size={11} color={c.amber} />
+              <Text style={styles.habitStreakText}>{habit.streak}</Text>
+            </View>
+          )}
+        </View>
+      </View>
+
+      <View style={styles.habitRight}>
+        <Text style={styles.habitRate}>{Math.round(habit.rate * 100)} %</Text>
+        {/* Une habitude jeune n'a pas 30 jours d'histoire : on le dit. */}
+        {habit.window < 30 && <Text style={styles.habitWindow}>{habit.window} j</Text>}
+      </View>
+    </View>
   );
 }
 
@@ -307,6 +406,47 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   sectionTitle: { fontSize: font.heading, fontWeight: '700', color: c.text },
   bigValue: { fontSize: font.title, fontWeight: '800', color: c.text },
   bigCaption: { fontSize: font.small, color: c.textMuted, marginTop: -spacing.sm },
+
+  // Détail par habitude
+  habitHeadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingBottom: spacing.xs,
+    // Aligné sur `habitMain` : la pastille + son écart, à gauche.
+    paddingLeft: 12 + spacing.sm,
+  },
+  habitHeadLetter: {
+    // Même largeur que les carrés (et le même `gap`) : les lettres tombent pile.
+    width: HABIT_CELL - HABIT_GAP,
+    textAlign: 'center',
+    fontSize: font.tiny,
+    color: c.textFaint,
+    fontWeight: '600',
+  },
+  habitHeadRate: { flex: 1, textAlign: 'right', fontSize: font.tiny, color: c.textFaint },
+  habitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.xs + 2,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: c.glassBorder,
+  },
+  habitDot: { width: 12, height: 12, borderRadius: 6 },
+  habitMain: { flex: 1, gap: 3 },
+  habitName: { fontSize: font.small + 1, fontWeight: '600', color: c.text },
+  habitBottom: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  habitWeek: { flexDirection: 'row', gap: HABIT_GAP },
+  habitCell: {
+    width: HABIT_CELL - HABIT_GAP,
+    height: HABIT_CELL - HABIT_GAP,
+    borderRadius: 3,
+  },
+  habitStreak: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  habitStreakText: { fontSize: font.tiny, fontWeight: '700', color: c.amber },
+  habitRight: { alignItems: 'flex-end', minWidth: 44 },
+  habitRate: { fontSize: font.body, fontWeight: '700', color: c.text },
+  habitWindow: { fontSize: font.tiny, color: c.textFaint },
 
   metaRow: { flexDirection: 'row', justifyContent: 'space-between' },
   meta: { alignItems: 'flex-start', gap: 2 },

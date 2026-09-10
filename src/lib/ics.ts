@@ -8,19 +8,27 @@
  * Ce qui est géré :
  *  - le dépliage des lignes (une ligne longue est coupée et poursuivie par une
  *    ligne commençant par une espace),
- *  - `VEVENT` : `SUMMARY`, `DTSTART`, `DTEND`, `DURATION`, `UID`,
+ *  - `VEVENT` : `SUMMARY`, `LOCATION`, `DTSTART`, `DTEND`, `DURATION`, `UID`,
  *  - les journées entières (`VALUE=DATE`), dont le `DTEND` exclusif de la norme
  *    est ramené au dernier jour réellement occupé,
  *  - la répétition `RRULE` : `FREQ` (DAILY/WEEKLY/MONTHLY/YEARLY), `INTERVAL`,
  *    `COUNT`, `UNTIL`, `BYDAY` (pour les hebdomadaires), et les dates exclues
- *    par `EXDATE`.
+ *    par `EXDATE`,
+ *  - les occurrences RETOUCHÉES à l'unité (`RECURRENCE-ID`) : le bloc de
+ *    remplacement prend la place de l'occurrence produite par la règle,
+ *  - `STATUS:CANCELLED` : l'événement (ou l'occurrence) est ignoré.
  *
- * Ce qui ne l'est PAS, volontairement (un agenda perso n'en a pas besoin, et
+ * Ces deux derniers points sont ce qui fait qu'un agenda distant reste FIDÈLE :
+ * modifier ou supprimer une seule date d'un rendez-vous répétitif n'efface pas
+ * la règle à la source, ça ajoute un VEVENT de même `UID`. Sans les traiter, la
+ * modification se dédoublait et la suppression ne se voyait pas.
+ *
+ * Ce qui n'est PAS géré, volontairement (un agenda perso n'en a pas besoin, et
  * chaque cas coûterait un vrai moteur de récurrence) :
  *  - les fuseaux : une heure `...Z` est convertie depuis UTC, tout le reste
  *    (y compris un `TZID=`) est pris pour de l'heure locale,
  *  - `BYDAY` positionnel ("2e jeudi du mois"), `BYMONTHDAY`, `BYSETPOS`,
- *  - les occurrences modifiées à l'unité (`RECURRENCE-ID`),
+ *  - `RANGE=THISANDFUTURE` sur un `RECURRENCE-ID` (traité comme une seule date),
  *  - les fichiers `VTIMEZONE`, `VTODO`, les pièces jointes, les alarmes.
  *
  * Les occurrences ne sont dépliées que sur une FENÊTRE de temps (par défaut un
@@ -55,15 +63,49 @@ export function parseIcs(
   const from = window?.from ?? addDays(todayKey(), -WINDOW_BEFORE);
   const to = window?.to ?? addDays(todayKey(), WINDOW_AFTER);
 
+  // Deux passes : il faut connaître les occurrences retouchées AVANT de
+  // déplier les règles de répétition, sinon on produirait les deux versions.
+  const blocks = splitEvents(unfold(text));
+  const rewritten = rewrittenDays(blocks);
+
   const out: ImportedEvent[] = [];
-  for (const block of splitEvents(unfold(text))) {
+  for (const block of blocks) {
     try {
-      out.push(...expand(block, from, to));
+      out.push(...expand(block, from, to, rewritten));
     } catch {
       // Un événement mal formé ne doit pas emporter tout l'abonnement.
     }
   }
   return out;
+}
+
+/**
+ * Repère les occurrences RETOUCHÉES d'une série : `UID` → jours remplacés.
+ *
+ * Déplacer ou supprimer UNE date d'un rendez-vous répétitif ne touche pas à la
+ * règle côté agenda : un second `VEVENT`, de même `UID`, est ajouté avec un
+ * `RECURRENCE-ID` — la date de l'occurrence d'ORIGINE (celle qu'il remplace).
+ * On note donc ces dates pour que la règle saute son propre exemplaire.
+ *
+ * Le repérage se fait au JOUR près et non à la milliseconde : les fuseaux ne
+ * sont pas gérés (voir l'en-tête), une comparaison exacte raterait dès que la
+ * source et le téléphone ne sont pas dans le même décalage. Aucune des règles
+ * qu'on sait déplier ne produisant deux occurrences le même jour, c'est sans
+ * ambiguïté.
+ */
+function rewrittenDays(blocks: Map<string, Prop[]>[]): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  for (const block of blocks) {
+    const rid = block.get('RECURRENCE-ID')?.[0];
+    if (!rid) continue;
+    const at = parseDate(rid);
+    if (!at) continue;
+    const uid = block.get('UID')?.[0]?.value ?? '';
+    const days = map.get(uid) ?? new Set<string>();
+    days.add(toDayKey(at.at));
+    map.set(uid, days);
+  }
+  return map;
 }
 
 // --- Découpage du fichier --------------------------------------------------
@@ -126,8 +168,22 @@ function splitEvents(lines: string[]): Map<string, Prop[]>[] {
 
 // --- Lecture d'un événement ------------------------------------------------
 
-/** Déplie un VEVENT en une ou plusieurs occurrences, bornées à la fenêtre. */
-function expand(block: Map<string, Prop[]>, from: string, to: string): ImportedEvent[] {
+/**
+ * Déplie un VEVENT en une ou plusieurs occurrences, bornées à la fenêtre.
+ * `rewritten` vient de `rewrittenDays()` : les jours qu'un autre bloc reprend
+ * à son compte, et que la règle de répétition doit donc laisser passer.
+ */
+function expand(
+  block: Map<string, Prop[]>,
+  from: string,
+  to: string,
+  rewritten: Map<string, Set<string>>,
+): ImportedEvent[] {
+  // Annulé à la source : ni la série, ni l'occurrence ne doivent apparaître.
+  // C'est ainsi qu'un agenda signale la suppression d'une date déjà publiée.
+  const status = (block.get('STATUS')?.[0]?.value ?? '').trim().toUpperCase();
+  if (status === 'CANCELLED') return [];
+
   const dtstartProp = block.get('DTSTART')?.[0];
   if (!dtstartProp) return []; // sans début, pas d'événement
 
@@ -135,6 +191,7 @@ function expand(block: Map<string, Prop[]>, from: string, to: string): ImportedE
   if (!start) return [];
 
   const title = decodeText(block.get('SUMMARY')?.[0]?.value ?? '(sans titre)');
+  const location = decodeText(block.get('LOCATION')?.[0]?.value ?? '');
 
   // Durée : soit DTEND, soit DURATION, sinon 1 h (ou la journée si VALUE=DATE).
   const dtendProp = block.get('DTEND')?.[0];
@@ -150,24 +207,35 @@ function expand(block: Map<string, Prop[]>, from: string, to: string): ImportedE
   }
   if (durationMs <= 0) durationMs = fallbackDuration(start);
 
-  // Les dates explicitement retirées de la série.
-  const excluded = new Set<number>();
+  // Ce bloc remplace-t-il UNE date d'une série (voir `rewrittenDays`) ? Si oui
+  // il ne vaut que pour lui-même : sa `RRULE`, héritée de la série, ne doit
+  // surtout pas être dépliée — ce serait toute la série en double.
+  const isRewrite = block.has('RECURRENCE-ID');
+  const uid = block.get('UID')?.[0]?.value ?? '';
+
+  // Les jours que la série ne doit PAS produire : ceux retirés par `EXDATE`,
+  // et ceux qu'un bloc de remplacement apporte déjà. Comparés au jour près,
+  // pour la raison expliquée dans `rewrittenDays`.
+  const skipped = new Set<string>();
   for (const ex of block.get('EXDATE') ?? []) {
     for (const piece of ex.value.split(',')) {
       const d = parseDate({ value: piece, params: ex.params });
-      if (d) excluded.add(d.at.getTime());
+      if (d) skipped.add(toDayKey(d.at));
     }
   }
+  if (!isRewrite) {
+    for (const day of rewritten.get(uid) ?? []) skipped.add(day);
+  }
 
-  const rrule = block.get('RRULE')?.[0]?.value;
+  const rrule = isRewrite ? undefined : block.get('RRULE')?.[0]?.value;
   const starts = rrule
     ? occurrences(start.at, rrule, from, to)
     : [start.at];
 
   const events: ImportedEvent[] = [];
   for (const at of starts) {
-    if (excluded.has(at.getTime())) continue;
-    const event = toEvent(title, at, durationMs, start.allDay);
+    if (skipped.has(toDayKey(at))) continue;
+    const event = toEvent(title, location, at, durationMs, start.allDay);
     // Hors fenêtre : on jette (une série sans RRULE peut être très ancienne).
     if (event.end_day < from || event.day > to) continue;
     events.push(event);
@@ -181,18 +249,25 @@ function fallbackDuration(start: IcsDate): number {
 }
 
 /** Met une occurrence à la convention de l'app (jours + heures locales). */
-function toEvent(title: string, at: Date, durationMs: number, allDay: boolean): ImportedEvent {
+function toEvent(
+  title: string,
+  location: string,
+  at: Date,
+  durationMs: number,
+  allDay: boolean,
+): ImportedEvent {
   const day = toDayKey(at);
   if (allDay) {
     // DTEND est EXCLUSIF dans la norme : un événement d'un jour va du 3 au 4.
     // On revient donc d'un jour pour obtenir le dernier jour réellement occupé.
     const lastMs = at.getTime() + durationMs - 86_400_000;
     const endDay = toDayKey(new Date(Math.max(lastMs, at.getTime())));
-    return { title, day, end_day: endDay, start: '00:00', end: '23:59' };
+    return { title, location, day, end_day: endDay, start: '00:00', end: '23:59' };
   }
   const endAt = new Date(at.getTime() + durationMs);
   return {
     title,
+    location,
     day,
     end_day: toDayKey(endAt),
     start: toTimeKey(at),

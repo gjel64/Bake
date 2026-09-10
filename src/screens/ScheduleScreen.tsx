@@ -17,7 +17,13 @@
  *
  * Les événements venus d'un abonnement .ics se mêlent aux autres, dans la
  * couleur de leur abonnement, mais ne s'ouvrent qu'en lecture (`openEdit`).
- * C'est cet écran qui déclenche leur synchronisation, une fois par session.
+ * C'est cet écran qui déclenche leur synchronisation, à chaque retour sur
+ * l'onglet (`syncAllCalendars` se charge de ne pas retélécharger trop souvent).
+ *
+ * Chaque vue a son propre FILTRE : l'entonnoir de la barre de navigation ouvre
+ * la liste des sources (catégories, abonnements) et laisse en masquer dans
+ * CETTE échelle de temps seulement (voir `@/lib/agendaFilters`). Les fonctions
+ * de lecture reçoivent donc toutes l'ensemble des sources masquées.
  *
  * Découpage : cet écran gère l'ÉTAT (vue courante, jour sélectionné, données)
  * et délègue le rendu de chaque vue à un petit composant dédié plus bas.
@@ -33,6 +39,7 @@ import { GradientHeader } from '@/components/GradientHeader';
 import { ScreenBackground } from '@/components/ui/ScreenBackground';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { AddEventModal } from '@/components/AddEventModal';
+import { AgendaFilterModal } from '@/components/AgendaFilterModal';
 import { syncAllCalendars } from '@/lib/calendars';
 import {
   DaySummary,
@@ -43,6 +50,11 @@ import {
   getMeditationSecondsForDay,
   setTodosDone,
 } from '@/db/database';
+import {
+  AGENDA_SCOPES,
+  AgendaScope,
+  getHiddenSources,
+} from '@/lib/agendaFilters';
 import {
   addDays,
   daysBetween,
@@ -61,8 +73,9 @@ import {
 } from '@/lib/dates';
 import { font, radius, softShadow, spacing, useC, useIsDark, withAlpha, type Palette } from '@/theme';
 
-const VIEWS = ['Jour', 'Semaine', 'Mois'] as const;
-type ViewMode = (typeof VIEWS)[number];
+// Les vues de l'agenda ET les échelles de temps du filtre sont la même chose.
+const VIEWS = AGENDA_SCOPES;
+type ViewMode = AgendaScope;
 
 /** Hauteur d'une heure dans le planning (px) — règle tout le calage vertical. */
 const HOUR_HEIGHT = 58;
@@ -87,6 +100,7 @@ export function ScheduleScreen() {
   const [view, setView] = useState<ViewMode>('Jour');
   const [selectedDay, setSelectedDay] = useState<string>(todayKey());
   const [modalOpen, setModalOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
   const [editing, setEditing] = useState<EventItem | null>(null);
   // Heure proposée à la création (créneau touché dans le planning).
   const [presetHour, setPresetHour] = useState<number | undefined>(undefined);
@@ -94,22 +108,28 @@ export function ScheduleScreen() {
   const [version, setVersion] = useState(0);
   const reload = () => setVersion((v) => v + 1);
 
-  // Recharge quand l'onglet redevient visible.
-  useFocusEffect(useCallback(() => reload(), []));
-
-  // Une seule fois par session, à la première ouverture de l'agenda : on
-  // rafraîchit les abonnements .ics, puis on relit si quelque chose a bougé.
-  // (Le téléchargement est silencieux — en attendant, l'agenda affiche les
-  // événements de la dernière synchronisation réussie.)
+  // Les sources masquées de la vue COURANTE. Relues à chaque changement de vue
+  // et à chaque rechargement (une catégorie a pu disparaître entre-temps).
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(() => getHiddenSources('Jour'));
   useEffect(() => {
-    let alive = true;
-    syncAllCalendars().then((n) => {
-      if (alive && n > 0) reload();
-    });
-    return () => {
-      alive = false;
-    };
-  }, []);
+    setHidden(getHiddenSources(view));
+  }, [view, version]);
+
+  // Au retour sur l'onglet : on relit la base, et on rafraîchit les abonnements
+  // .ics — silencieusement, et au plus une fois toutes les cinq minutes. En
+  // attendant, l'agenda affiche la dernière synchronisation réussie.
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+      let alive = true;
+      syncAllCalendars().then((n) => {
+        if (alive && n > 0) reload();
+      });
+      return () => {
+        alive = false;
+      };
+    }, []),
+  );
 
   /** Avance/recule d'une période selon la vue courante. */
   function shift(direction: -1 | 1) {
@@ -142,9 +162,10 @@ export function ScheduleScreen() {
         span.total === 1
           ? `${labelDayLong(ev.day)}, ${ev.start} – ${ev.end}`
           : `Du ${labelDayLong(ev.day)} (${ev.start}) au ${labelDayLong(ev.end_day)} (${ev.end})`;
+      const where = ev.location ? `\n${ev.location}` : '';
       Alert.alert(
         ev.title,
-        `${when}\n\nAbonnement « ${cal?.name ?? 'agenda externe'} » — lecture seule.`,
+        `${when}${where}\n\nAbonnement « ${cal?.name ?? 'agenda externe'} » — lecture seule.`,
       );
       return;
     }
@@ -189,13 +210,17 @@ export function ScheduleScreen() {
           }
         />
 
-        {/* Barre de navigation de période : ‹ label › — le label ramène à aujourd'hui */}
+        {/* Barre de navigation de période : ‹ label › — le label ramène à aujourd'hui.
+            L'entonnoir, à droite, ouvre le filtre de CETTE vue. */}
         <View style={styles.navBar}>
-          <NavArrow icon="chevron-back" onPress={() => shift(-1)} />
-          <Pressable onPress={() => setSelectedDay(todayKey())} hitSlop={8}>
-            <Text style={styles.periodLabel}>{periodLabel}</Text>
-          </Pressable>
-          <NavArrow icon="chevron-forward" onPress={() => shift(1)} />
+          <View style={styles.navGroup}>
+            <NavArrow icon="chevron-back" onPress={() => shift(-1)} />
+            <Pressable onPress={() => setSelectedDay(todayKey())} hitSlop={8}>
+              <Text style={styles.periodLabel}>{periodLabel}</Text>
+            </Pressable>
+            <NavArrow icon="chevron-forward" onPress={() => shift(1)} />
+          </View>
+          <FilterButton count={hidden.size} onPress={() => setFilterOpen(true)} />
         </View>
 
         {/* La vue active */}
@@ -203,6 +228,7 @@ export function ScheduleScreen() {
           <DayView
             day={selectedDay}
             version={version}
+            hidden={hidden}
             onOpen={openEdit}
             onToggle={toggleLinked}
             onCreateAt={openAdd}
@@ -213,6 +239,7 @@ export function ScheduleScreen() {
           <WeekView
             day={selectedDay}
             version={version}
+            hidden={hidden}
             onOpen={openEdit}
             onToggle={toggleLinked}
             onPickDay={(d) => {
@@ -226,6 +253,7 @@ export function ScheduleScreen() {
             month={selectedDay}
             selected={selectedDay}
             version={version}
+            hidden={hidden}
             onSelect={setSelectedDay}
             onOpen={openEdit}
             onToggle={toggleLinked}
@@ -251,6 +279,13 @@ export function ScheduleScreen() {
           onClose={() => setModalOpen(false)}
           onSaved={reload}
         />
+
+        <AgendaFilterModal
+          visible={filterOpen}
+          scope={view}
+          onClose={() => setFilterOpen(false)}
+          onChanged={reload}
+        />
       </SafeAreaView>
     </ScreenBackground>
   );
@@ -263,6 +298,7 @@ export function ScheduleScreen() {
 function DayView({
   day,
   version,
+  hidden,
   onOpen,
   onToggle,
   onCreateAt,
@@ -270,6 +306,7 @@ function DayView({
 }: {
   day: string;
   version: number;
+  hidden: ReadonlySet<string>; // sources masquées dans la vue Jour
   onOpen: (ev: EventItem) => void;
   onToggle: (ev: EventItem) => void;
   onCreateAt: (hour: number) => void;
@@ -280,9 +317,9 @@ function DayView({
   const [events, setEvents] = useState<EventItem[]>([]);
   const [meditationSec, setMeditationSec] = useState(0);
   useEffect(() => {
-    setEvents(getEventsForDay(day));
+    setEvents(getEventsForDay(day, hidden));
     setMeditationSec(getMeditationSecondsForDay(day));
-  }, [day, version]);
+  }, [day, version, hidden]);
 
   // Les événements sur plusieurs jours vont dans la bande du haut ; les autres
   // se posent dans le planning, à leur horaire.
@@ -291,7 +328,7 @@ function DayView({
 
   return (
     <View style={styles.dayWrap}>
-      <WeekStrip day={day} version={version} onPick={onPickDay} />
+      <WeekStrip day={day} version={version} hidden={hidden} onPick={onPickDay} />
 
       {(longEvents.length > 0 || meditationSec > 0) && (
         <View style={styles.allDayBand}>
@@ -317,10 +354,12 @@ function DayView({
 function WeekStrip({
   day,
   version,
+  hidden,
   onPick,
 }: {
   day: string;
   version: number;
+  hidden: ReadonlySet<string>;
   onPick: (day: string) => void;
 }) {
   const c = useC();
@@ -329,8 +368,8 @@ function WeekStrip({
   const today = todayKey();
   const [summary, setSummary] = useState<Record<string, DaySummary>>({});
   useEffect(() => {
-    setSummary(getEventDaysInRange(days[0], days[6]));
-  }, [days[0], version]);
+    setSummary(getEventDaysInRange(days[0], days[6], hidden));
+  }, [days[0], version, hidden]);
 
   return (
     <View style={styles.strip}>
@@ -469,6 +508,8 @@ function EventBlock({
   const height = Math.max(((slot.endMin - slot.startMin) / 60) * HOUR_HEIGHT - 2, MIN_BLOCK);
   // Sous ~40 px il n'y a de place que pour le titre : on met tout sur une ligne.
   const compact = height < 40;
+  // Le lieu (abonnements .ics) ne tient qu'en troisième ligne, donc sur un bloc assez haut.
+  const showLocation = !compact && ev.location !== '' && height >= 56;
 
   return (
     <Pressable
@@ -518,6 +559,11 @@ function EventBlock({
         {!compact && (
           <Text style={styles.blockTime} numberOfLines={1}>
             {ev.start} – {ev.end}
+          </Text>
+        )}
+        {showLocation && (
+          <Text style={styles.blockPlace} numberOfLines={1}>
+            {ev.location}
           </Text>
         )}
       </View>
@@ -583,12 +629,14 @@ function MeditationBadge({ seconds }: { seconds: number }) {
 function WeekView({
   day,
   version,
+  hidden,
   onOpen,
   onToggle,
   onPickDay,
 }: {
   day: string;
   version: number;
+  hidden: ReadonlySet<string>; // sources masquées dans la vue Semaine
   onOpen: (ev: EventItem) => void;
   onToggle: (ev: EventItem) => void;
   onPickDay: (day: string) => void;
@@ -605,6 +653,7 @@ function WeekView({
           key={d}
           day={d}
           version={version}
+          hidden={hidden}
           isToday={d === today}
           onTitlePress={() => onPickDay(d)}
           onOpen={onOpen}
@@ -618,6 +667,7 @@ function WeekView({
 function WeekDayBlock({
   day,
   version,
+  hidden,
   isToday,
   onTitlePress,
   onOpen,
@@ -625,6 +675,7 @@ function WeekDayBlock({
 }: {
   day: string;
   version: number;
+  hidden: ReadonlySet<string>;
   isToday: boolean;
   onTitlePress: () => void;
   onOpen: (ev: EventItem) => void;
@@ -635,9 +686,9 @@ function WeekDayBlock({
   const [events, setEvents] = useState<EventItem[]>([]);
   const [meditationSec, setMeditationSec] = useState(0);
   useEffect(() => {
-    setEvents(getEventsForDay(day));
+    setEvents(getEventsForDay(day, hidden));
     setMeditationSec(getMeditationSecondsForDay(day));
-  }, [day, version]);
+  }, [day, version, hidden]);
 
   return (
     <View style={[styles.weekBlock, isToday && { borderColor: c.primary }]}>
@@ -672,6 +723,7 @@ function MonthView({
   month,
   selected,
   version,
+  hidden,
   onSelect,
   onOpenDay,
   onOpen,
@@ -680,6 +732,7 @@ function MonthView({
   month: string;
   selected: string;
   version: number;
+  hidden: ReadonlySet<string>; // sources masquées dans la vue Mois
   onSelect: (day: string) => void;
   onOpenDay: (day: string) => void;
   onOpen: (ev: EventItem) => void;
@@ -694,8 +747,8 @@ function MonthView({
 
   const [summary, setSummary] = useState<Record<string, DaySummary>>({});
   useEffect(() => {
-    setSummary(getEventDaysInRange(first, last));
-  }, [first, last, version]);
+    setSummary(getEventDaysInRange(first, last, hidden));
+  }, [first, last, version, hidden]);
 
   return (
     <View style={styles.monthWrap}>
@@ -732,6 +785,7 @@ function MonthView({
       <MonthDayList
         day={selected}
         version={version}
+        hidden={hidden}
         onOpenDay={() => onOpenDay(selected)}
         onOpen={onOpen}
         onToggle={onToggle}
@@ -795,12 +849,14 @@ function MonthCell({
 function MonthDayList({
   day,
   version,
+  hidden,
   onOpenDay,
   onOpen,
   onToggle,
 }: {
   day: string;
   version: number;
+  hidden: ReadonlySet<string>;
   onOpenDay: () => void;
   onOpen: (ev: EventItem) => void;
   onToggle: (ev: EventItem) => void;
@@ -810,9 +866,9 @@ function MonthDayList({
   const [events, setEvents] = useState<EventItem[]>([]);
   const [meditationSec, setMeditationSec] = useState(0);
   useEffect(() => {
-    setEvents(getEventsForDay(day));
+    setEvents(getEventsForDay(day, hidden));
     setMeditationSec(getMeditationSecondsForDay(day));
-  }, [day, version]);
+  }, [day, version, hidden]);
 
   return (
     <View style={styles.monthList}>
@@ -892,6 +948,42 @@ function EventListRow({
       )}
       <Ionicons name="chevron-forward" size={16} color={c.textFaint} />
     </Pressable>
+  );
+}
+
+/**
+ * L'entonnoir de la barre de navigation : ouvre le filtre de la vue courante.
+ * Il prend la couleur d'accent et affiche un compteur dès qu'une source est
+ * masquée — sinon on chercherait longtemps pourquoi l'agenda paraît vide.
+ */
+function FilterButton({ count, onPress }: { count: number; onPress: () => void }) {
+  const c = useC();
+  const styles = makeStyles(c);
+  const active = count > 0;
+  return (
+    // Le badge est posé DANS la marge du conteneur, jamais en débordement :
+    // Android rogne les enfants qui dépassent d'une vue à `borderRadius`.
+    <View style={styles.filterWrap}>
+      <Pressable
+        onPress={onPress}
+        hitSlop={10}
+        style={[
+          styles.navArrow,
+          active && { backgroundColor: c.primarySoft, borderColor: c.primary },
+        ]}
+      >
+        <Ionicons
+          name={active ? 'funnel' : 'funnel-outline'}
+          size={16}
+          color={active ? c.primary : c.aurora}
+        />
+      </Pressable>
+      {active && (
+        <View style={styles.filterBadge} pointerEvents="none">
+          <Text style={styles.filterBadgeText}>{count}</Text>
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -1002,10 +1094,18 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   navBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
     paddingBottom: spacing.sm,
+  },
+  // Les flèches et le libellé occupent toute la largeur restante ; l'entonnoir
+  // reste collé au bord droit.
+  navGroup: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginRight: spacing.md,
   },
   navArrow: {
     width: 36,
@@ -1023,6 +1123,21 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     color: c.text,
     textTransform: 'capitalize',
   },
+  // Le conteneur de l'entonnoir réserve la place du badge dans son coin.
+  filterWrap: { paddingTop: 5, paddingRight: 5 },
+  filterBadge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    backgroundColor: c.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterBadgeText: { fontSize: 10, fontWeight: '800', color: c.textOnAurora },
   strike: { color: c.textMuted, textDecorationLine: 'line-through' },
 
   // --- Vue jour : bande des jours -----------------------------------------
@@ -1131,6 +1246,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   blockTitle: { flex: 1, fontSize: font.small, fontWeight: '600', color: c.text },
   blockTime: { fontSize: font.tiny, color: c.textMuted, marginTop: 1 },
   blockTimeInline: { fontSize: font.tiny, color: c.textMuted },
+  blockPlace: { fontSize: font.tiny, color: c.textMuted, fontStyle: 'italic' },
 
   nowRow: {
     position: 'absolute',
