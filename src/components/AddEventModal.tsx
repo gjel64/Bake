@@ -10,11 +10,15 @@
  *    premier jour (à l'heure de début) au dernier (à l'heure de fin), les
  *    journées intermédiaires étant occupées en entier.
  *
+ *  - des RAPPELS avant le début (notification ou alarme, `ReminderPicker`),
+ *  - deux actions : « Créer une tâche » (en édition, si l'écran fournit
+ *    `onMakeTodo`) et « Alarme dans l'Horloge » (Android).
+ *
  * Sur une seule journée, choisir une heure de début recale la fin à +1 h ;
  * sur plusieurs jours les deux heures sont indépendantes (14:00 → 11:00 est
  * parfaitement valide).
  *
- * Écrit directement en base puis prévient via `onSaved`.
+ * Écrit directement en base, reprogramme les rappels, puis prévient via `onSaved`.
  */
 
 import { useEffect, useState } from 'react';
@@ -32,6 +36,10 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 
 import { CategoryPicker } from '@/components/CategoryPicker';
+import { ClockAlarmButton } from '@/components/ClockAlarmButton';
+import { ReminderPicker } from '@/components/ReminderPicker';
+import { canSetClockAlarm } from '@/lib/alarmClock';
+import { syncEventReminders } from '@/lib/eventReminders';
 import {
   EventItem,
   Todo,
@@ -59,6 +67,7 @@ type Props = {
   presetTitle?: string; // pré-remplissage (depuis un to-do)
   presetTodoIds?: number[];
   presetCategoryId?: number | null;
+  onMakeTodo?: (ev: EventItem) => void; // « Créer une tâche » depuis l'événement édité
   onClose: () => void;
   onSaved: () => void;
 };
@@ -93,6 +102,7 @@ export function AddEventModal({
   presetTitle,
   presetTodoIds,
   presetCategoryId,
+  onMakeTodo,
   onClose,
   onSaved,
 }: Props) {
@@ -108,6 +118,8 @@ export function AddEventModal({
   const [end, setEnd] = useState<Date>(atHour(defaultDay, 10));
   const [picker, setPicker] = useState<PickerKind>(null);
   const [todos, setTodos] = useState<Todo[]>([]);
+  const [reminders, setReminders] = useState<number[]>([]);
+  const [alarm, setAlarm] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -123,6 +135,8 @@ export function AddEventModal({
       setMultiDay(event.end_day > event.day);
       setStart(atMinute(event.day, sh, sm));
       setEnd(atMinute(event.day, eh, em));
+      setReminders(event.reminders);
+      setAlarm(event.reminder_alarm === 1);
       // On propose les tâches à faire + celles déjà rattachées (pour les retirer).
       setTodos(
         getTodos().filter((t) => t.done === 0 || event.todo_ids.includes(t.id)),
@@ -138,6 +152,8 @@ export function AddEventModal({
       const h = defaultHour ?? 9;
       setStart(atHour(defaultDay, h));
       setEnd(atHour(defaultDay, Math.min(h + 1, 23)));
+      setReminders([]);
+      setAlarm(false);
       // Tâches à faire : celles déjà planifiées ailleurs restent proposées.
       setTodos(getTodos().filter((t) => t.done === 0));
     }
@@ -199,14 +215,15 @@ export function AddEventModal({
     if (event) {
       updateEvent(
         event.id, t, dayKey, endDayKey,
-        toTimeKey(start), toTimeKey(safeEnd), categoryId, linkTodoIds,
+        toTimeKey(start), toTimeKey(safeEnd), categoryId, linkTodoIds, reminders, alarm,
       );
     } else {
       addEvent(
         t, dayKey, endDayKey,
-        toTimeKey(start), toTimeKey(safeEnd), categoryId, linkTodoIds,
+        toTimeKey(start), toTimeKey(safeEnd), categoryId, linkTodoIds, reminders, alarm,
       );
     }
+    void syncEventReminders();
     onSaved();
     onClose();
   }
@@ -214,11 +231,13 @@ export function AddEventModal({
   function remove() {
     if (!event) return;
     deleteEvent(event.id);
+    void syncEventReminders();
     onSaved();
     onClose();
   }
 
   const showTodoLinks = todos.length > 0;
+  const canMakeTodo = event != null && onMakeTodo !== undefined;
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -331,6 +350,29 @@ export function AddEventModal({
                     ? 'Lié à 1 to-do (coché des deux côtés)'
                     : `Lié à ${linkTodoIds.length} to-dos (cochés des deux côtés)`}
                 </Text>
+              </View>
+            )}
+
+            <Text style={styles.label}>Rappels</Text>
+            <ReminderPicker
+              value={reminders}
+              onChange={setReminders}
+              alarm={alarm}
+              onAlarmChange={setAlarm}
+            />
+
+            {(canMakeTodo || canSetClockAlarm()) && (
+              <View style={styles.actions}>
+                {canMakeTodo && event && (
+                  <Pressable
+                    onPress={() => onMakeTodo?.(event)}
+                    style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.7 }]}
+                  >
+                    <Ionicons name="checkbox-outline" size={18} color={c.aurora} />
+                    <Text style={styles.actionText}>Créer une tâche</Text>
+                  </Pressable>
+                )}
+                <ClockAlarmButton title={title} day={toDayKey(day)} start={toTimeKey(start)} />
               </View>
             )}
 
@@ -469,6 +511,13 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginTop: spacing.md,
   },
   linkNoteText: { fontSize: font.small, color: c.aurora },
+  actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+  actionBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
+    borderWidth: 1, borderColor: c.glassBorder, borderRadius: radius.md,
+    paddingVertical: spacing.sm + 2, paddingHorizontal: spacing.sm,
+  },
+  actionText: { fontSize: font.small, color: c.text, fontWeight: '600' },
   submit: {
     marginTop: spacing.lg, backgroundColor: c.primary, borderRadius: radius.md,
     paddingVertical: spacing.md, alignItems: 'center',

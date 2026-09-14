@@ -1,0 +1,7 @@
+{
+  "name": "bake-alarm",
+  "platforms": ["android"],
+  "android": {
+    "modules": ["expo.modules.bakealarm.BakeAlarmModule"]
+  }
+}

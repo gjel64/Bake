@@ -10,6 +10,10 @@
  * que de découvrir un agenda vide plus tard.
  *
  * Supprimer l'abonnement retire aussi tous les événements qu'il avait apportés.
+ *
+ * Les RAPPELS se règlent ici, pour tous les événements de l'abonnement d'un
+ * coup : ces événements sont réécrits à chaque synchronisation, ils ne peuvent
+ * rien garder pour eux-mêmes.
  */
 
 import { useEffect, useState } from 'react';
@@ -33,7 +37,9 @@ import {
   getCalendar,
   updateCalendar,
 } from '@/db/database';
+import { ReminderPicker } from '@/components/ReminderPicker';
 import { syncCalendar } from '@/lib/calendars';
+import { syncEventReminders } from '@/lib/eventReminders';
 import { font, habitPalette, onSwatch, radius, spacing, useC, type Palette } from '@/theme';
 
 type Props = {
@@ -49,6 +55,8 @@ export function CalendarSubModal({ visible, calendar, onClose, onSaved }: Props)
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [color, setColor] = useState(habitPalette[1]);
+  const [reminders, setReminders] = useState<number[]>([]);
+  const [alarm, setAlarm] = useState(false);
   const [busy, setBusy] = useState(false);
   // Message affiché sous le formulaire après une tentative de synchronisation.
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +66,8 @@ export function CalendarSubModal({ visible, calendar, onClose, onSaved }: Props)
     setName(calendar?.name ?? '');
     setUrl(calendar?.url ?? '');
     setColor(calendar?.color ?? habitPalette[1]);
+    setReminders(calendar?.reminders ?? []);
+    setAlarm(calendar?.reminder_alarm === 1);
     setError(null);
     setBusy(false);
   }, [visible, calendar]);
@@ -72,8 +82,8 @@ export function CalendarSubModal({ visible, calendar, onClose, onSaved }: Props)
     setError(null);
 
     const id = calendar
-      ? (updateCalendar(calendar.id, cleanName, cleanUrl, color), calendar.id)
-      : addCalendar(cleanName, cleanUrl, color);
+      ? (updateCalendar(calendar.id, cleanName, cleanUrl, color, reminders, alarm), calendar.id)
+      : addCalendar(cleanName, cleanUrl, color, reminders, alarm);
 
     // On relit la ligne : `syncCalendar` travaille à partir de l'abonnement enregistré.
     const saved = getCalendar(id);
@@ -85,6 +95,9 @@ export function CalendarSubModal({ visible, calendar, onClose, onSaved }: Props)
     onSaved(); // dans tous les cas : la couleur et le nom, eux, sont enregistrés
 
     if (!result.ok) {
+      // Une synchro réussie reprogramme les rappels ; ratée, il faut le faire
+      // ici, les rappels de l'abonnement ont pu changer.
+      void syncEventReminders();
       // L'abonnement reste en place, l'utilisateur peut corriger l'adresse.
       setError(result.error);
       return;
@@ -104,6 +117,7 @@ export function CalendarSubModal({ visible, calendar, onClose, onSaved }: Props)
           style: 'destructive',
           onPress: () => {
             deleteCalendar(calendar.id);
+            void syncEventReminders();
             onSaved();
             onClose();
           },
@@ -164,6 +178,17 @@ export function CalendarSubModal({ visible, calendar, onClose, onSaved }: Props)
               </Pressable>
             ))}
           </View>
+
+          <Text style={styles.label}>RAPPELS</Text>
+          <ReminderPicker
+            value={reminders}
+            onChange={setReminders}
+            alarm={alarm}
+            onAlarmChange={setAlarm}
+          />
+          <Text style={styles.hint}>
+            Appliqués à chacun des événements de cet abonnement.
+          </Text>
 
           {error !== null && (
             <View style={styles.error}>

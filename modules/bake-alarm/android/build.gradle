@@ -1,0 +1,20 @@
+// bake-alarm — module natif local (autolinké depuis `modules/`), voir src/lib/alarmClock.ts.
+apply plugin: 'com.android.library'
+
+group = 'expo.modules.bakealarm'
+version = '1.0.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+useExpoPublishing()
+
+android {
+  namespace "expo.modules.bakealarm"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}

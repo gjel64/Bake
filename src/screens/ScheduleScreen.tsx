@@ -16,7 +16,12 @@
  * et « journée » entre les deux (voir `spanFor`).
  *
  * Les événements venus d'un abonnement .ics se mêlent aux autres, dans la
- * couleur de leur abonnement, mais ne s'ouvrent qu'en lecture (`openEdit`).
+ * couleur de leur abonnement, mais ne s'ouvrent qu'en lecture (`openEdit` →
+ * `EventDetailModal`).
+ *
+ * Depuis n'importe quel événement, perso ou d'abonnement, on peut « Créer une
+ * tâche » (`makeTodo`) : un to-do pré-rempli, rattaché à l'événement s'il est
+ * perso — un événement d'abonnement, réécrit à chaque synchro, perdrait le lien.
  * C'est cet écran qui déclenche leur synchronisation, à chaque retour sur
  * l'onglet (`syncAllCalendars` se charge de ne pas retélécharger trop souvent).
  *
@@ -30,7 +35,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -40,6 +45,8 @@ import { ScreenBackground } from '@/components/ui/ScreenBackground';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { AddEventModal } from '@/components/AddEventModal';
 import { AgendaFilterModal } from '@/components/AgendaFilterModal';
+import { EventDetailModal, eventWhenLabel } from '@/components/EventDetailModal';
+import { TodoModal } from '@/components/TodoModal';
 import { syncAllCalendars } from '@/lib/calendars';
 import {
   DaySummary,
@@ -102,6 +109,10 @@ export function ScheduleScreen() {
   const [modalOpen, setModalOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [editing, setEditing] = useState<EventItem | null>(null);
+  // Fiche en lecture seule d'un événement d'abonnement.
+  const [detail, setDetail] = useState<EventItem | null>(null);
+  // Événement dont on est en train de tirer une tâche.
+  const [todoFrom, setTodoFrom] = useState<EventItem | null>(null);
   // Heure proposée à la création (créneau touché dans le planning).
   const [presetHour, setPresetHour] = useState<number | undefined>(undefined);
   // Compteur qui, lorsqu'il change, force le rechargement des données.
@@ -152,27 +163,35 @@ export function ScheduleScreen() {
    * Ouvre l'édition d'un événement (le tap sur un bloc ou une ligne).
    * Un événement venu d'un abonnement .ics est en LECTURE SEULE : il serait
    * de toute façon écrasé à la prochaine synchronisation, alors on se contente
-   * d'en montrer le détail.
+   * d'en montrer la fiche.
    */
   function openEdit(ev: EventItem) {
     if (ev.calendar_id !== null) {
-      const cal = getCalendar(ev.calendar_id);
-      const span = spanFor(ev, selectedDay);
-      const when =
-        span.total === 1
-          ? `${labelDayLong(ev.day)}, ${ev.start} – ${ev.end}`
-          : `Du ${labelDayLong(ev.day)} (${ev.start}) au ${labelDayLong(ev.end_day)} (${ev.end})`;
-      const where = ev.location ? `\n${ev.location}` : '';
-      Alert.alert(
-        ev.title,
-        `${when}${where}\n\nAbonnement « ${cal?.name ?? 'agenda externe'} » — lecture seule.`,
-      );
+      setDetail(ev);
       return;
     }
     setEditing(ev);
     setPresetHour(undefined);
     setModalOpen(true);
   }
+
+  /**
+   * « Créer une tâche » depuis un événement : on referme la fiche ou le
+   * formulaire, puis on ouvre le to-do. Le court délai laisse la première
+   * modale finir de glisser — iOS refuse d'en présenter une pendant qu'une
+   * autre se ferme.
+   */
+  function makeTodo(ev: EventItem) {
+    setModalOpen(false);
+    setDetail(null);
+    setTimeout(() => setTodoFrom(ev), 350);
+  }
+
+  // Pré-remplissage du to-do : des chaînes, pour ne pas relancer l'effet de la modale.
+  const todoNotes = useMemo(
+    () => (todoFrom ? eventTodoNotes(todoFrom) : undefined),
+    [todoFrom],
+  );
 
   /**
    * Coche/décoche un événement lié : on bascule TOUS ses to-dos d'un coup.
@@ -276,7 +295,25 @@ export function ScheduleScreen() {
           defaultDay={selectedDay}
           defaultHour={presetHour}
           event={editing}
+          onMakeTodo={makeTodo}
           onClose={() => setModalOpen(false)}
+          onSaved={reload}
+        />
+
+        <EventDetailModal
+          event={detail}
+          onClose={() => setDetail(null)}
+          onMakeTodo={makeTodo}
+        />
+
+        <TodoModal
+          visible={todoFrom !== null}
+          todo={null}
+          presetTitle={todoFrom?.title}
+          presetNotes={todoNotes}
+          presetCategoryId={todoFrom?.category_id ?? null}
+          linkEventId={todoFrom && todoFrom.calendar_id === null ? todoFrom.id : null}
+          onClose={() => setTodoFrom(null)}
           onSaved={reload}
         />
 
@@ -1080,6 +1117,21 @@ function rowTimeLabel(ev: EventItem, day: string): string {
   if (span.total === 1 || span.first) return ev.start;
   if (span.last) return `→ ${ev.end}`;
   return '·';
+}
+
+/**
+ * Les notes d'un to-do tiré d'un événement : quand, où, et de quel agenda il
+ * vient — de quoi s'y retrouver une fois la tâche loin de l'agenda.
+ */
+function eventTodoNotes(ev: EventItem): string {
+  const when = eventWhenLabel(ev);
+  const lines = [when.charAt(0).toUpperCase() + when.slice(1)];
+  if (ev.location) lines.push(ev.location);
+  if (ev.calendar_id !== null) {
+    const name = getCalendar(ev.calendar_id)?.name;
+    if (name) lines.push(`Agenda : ${name}`);
+  }
+  return lines.join('\n');
 }
 
 /** Libellé de plage de semaine, ex : "6 – 12 juil.". */

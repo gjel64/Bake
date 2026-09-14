@@ -38,6 +38,7 @@ import {
 } from '@/db/database';
 import { syncCalendar } from '@/lib/calendars';
 import { exportToFile, importFromFile } from '@/lib/backup';
+import { syncEventReminders } from '@/lib/eventReminders';
 import { getHabitsReminderTime, setHabitsReminderTime, syncHabitsReminder } from '@/lib/habitsReminder';
 import { toTimeKey } from '@/lib/dates';
 import { getAccent } from '@/lib/accent';
@@ -197,6 +198,8 @@ export function SettingsModal({
                 // La sauvegarde a rapporté un id de notification périmé :
                 // on reprogramme le rappel d'après l'heure restaurée.
                 await syncHabitsReminder();
+                // Idem pour les rappels d'événements, d'après les événements restaurés.
+                await syncEventReminders();
                 // L'apparence et la teinte voyagent elles aussi dans la sauvegarde.
                 setMode(getThemeMode());
                 setAccent(getAccent());

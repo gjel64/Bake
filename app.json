@@ -34,9 +34,13 @@
     "android": {
       "package": "com.bake.app",
       "allowBackup": true,
+      "permissions": [
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.USE_EXACT_ALARM"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0C1712"
+        "backgroundColor": "#000000"
       }
     },
     "web": {},

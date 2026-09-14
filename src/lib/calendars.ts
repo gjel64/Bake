@@ -21,6 +21,7 @@ import {
   getCalendars,
   replaceCalendarEvents,
 } from '@/db/database';
+import { syncEventReminders } from '@/lib/eventReminders';
 import { parseIcs } from '@/lib/ics';
 
 /** Abandon d'un téléchargement qui traîne (ms). */
@@ -90,12 +91,22 @@ export async function fetchIcs(url: string): Promise<FetchResult> {
   }
 }
 
-/** Synchronise un abonnement : téléchargement, lecture, puis remplacement en base. */
-export async function syncCalendar(cal: CalendarSub): Promise<SyncResult> {
+/** Téléchargement, lecture, puis remplacement en base — sans toucher aux rappels. */
+async function pullCalendar(cal: CalendarSub): Promise<SyncResult> {
   const result = await fetchIcs(cal.url);
   if (!result.ok) return result;
   replaceCalendarEvents(cal.id, result.events);
   return { ok: true, count: result.count };
+}
+
+/**
+ * Synchronise un abonnement. Ses événements ayant été réécrits (nouveaux ids,
+ * dates peut-être déplacées), les rappels d'événements sont reprogrammés.
+ */
+export async function syncCalendar(cal: CalendarSub): Promise<SyncResult> {
+  const result = await pullCalendar(cal);
+  if (result.ok) void syncEventReminders();
+  return result;
 }
 
 /**
@@ -111,6 +122,9 @@ export async function syncAllCalendars(force = false): Promise<number> {
   if (!force && Date.now() - lastAutoSync < MIN_INTERVAL_MS) return 0;
   lastAutoSync = Date.now();
 
-  const results = await Promise.all(cals.map((cal) => syncCalendar(cal)));
-  return results.filter((r) => r.ok).length;
+  const results = await Promise.all(cals.map((cal) => pullCalendar(cal)));
+  const updated = results.filter((r) => r.ok).length;
+  // Une seule reprogrammation des rappels pour tout le lot.
+  if (updated > 0) void syncEventReminders();
+  return updated;
 }

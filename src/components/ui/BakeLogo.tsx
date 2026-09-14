@@ -14,8 +14,8 @@
 import { Defs, G, LinearGradient, Path, Rect, Stop, Svg } from 'react-native-svg';
 
 /** Couleurs du logo — identiques à celles de `scripts/make_icons.mjs`. */
-const CRUST_TOP = '#16241D';
-const CRUST_BOTTOM = '#0C1712';
+const CRUST_TOP = '#161616';
+const CRUST_BOTTOM = '#000000';
 const AMBER_TOP = '#F2C574';
 const AMBER_BOTTOM = '#DB9F44';
 const AMBER_FLAT = '#E8B45E';

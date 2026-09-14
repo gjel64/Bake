@@ -27,8 +27,8 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 // --- Le dessin ------------------------------------------------------------
 
 /** Couleurs du logo (figées : une icône ne suit pas le thème du téléphone). */
-const CRUST_TOP = '#16241D'; // fond, haut
-const CRUST_BOTTOM = '#0C1712'; // fond, bas
+const CRUST_TOP = '#161616'; // fond, haut (noir à peine relevé)
+const CRUST_BOTTOM = '#000000'; // fond, bas (noir)
 const AMBER_TOP = '#F2C574'; // dôme, haut
 const AMBER_BOTTOM = '#DB9F44'; // dôme, bas
 const AMBER_FLAT = '#E8B45E'; // socle

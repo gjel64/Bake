@@ -5,6 +5,10 @@
  * (notification programmée à une date/heure). En mode édition, un bouton
  * supprime le to-do.
  *
+ * Création depuis un événement de l'agenda : titre, notes et catégorie arrivent
+ * pré-remplis (`preset…`), et `linkEventId` rattache la nouvelle tâche à cet
+ * événement s'il est perso (un événement d'abonnement ne garde aucun lien).
+ *
  * La sauvegarde est ASYNCHRONE car programmer/annuler une notification l'est.
  */
 
@@ -25,13 +29,18 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { CategoryPicker } from '@/components/CategoryPicker';
 import { PriorityPicker } from '@/components/PriorityPicker';
-import { Todo, addTodo, deleteTodo, updateTodo } from '@/db/database';
+import { Todo, addTodo, deleteTodo, linkTodoToEvent, updateTodo } from '@/db/database';
+import { syncEventReminders } from '@/lib/eventReminders';
 import { cancelReminder, scheduleReminder } from '@/lib/notifications';
 import { font, radius, spacing, useC, type Palette } from '@/theme';
 
 type Props = {
   visible: boolean;
   todo: Todo | null; // null = création
+  presetTitle?: string; // pré-remplissage à la création (depuis un événement)
+  presetNotes?: string;
+  presetCategoryId?: number | null;
+  linkEventId?: number | null; // événement perso auquel rattacher la tâche créée
   onClose: () => void;
   onSaved: () => void;
 };
@@ -55,7 +64,16 @@ function formatRemind(d: Date): string {
   });
 }
 
-export function TodoModal({ visible, todo, onClose, onSaved }: Props) {
+export function TodoModal({
+  visible,
+  todo,
+  presetTitle,
+  presetNotes,
+  presetCategoryId,
+  linkEventId,
+  onClose,
+  onSaved,
+}: Props) {
   const c = useC();
   const styles = makeStyles(c);
   const [title, setTitle] = useState('');
@@ -69,14 +87,14 @@ export function TodoModal({ visible, todo, onClose, onSaved }: Props) {
 
   useEffect(() => {
     if (!visible) return;
-    setTitle(todo?.title ?? '');
-    setCategoryId(todo?.category_id ?? null);
+    setTitle(todo?.title ?? presetTitle ?? '');
+    setCategoryId(todo ? todo.category_id : (presetCategoryId ?? null));
     setPriority(todo?.priority ?? 1);
-    setNotes(todo?.notes ?? '');
+    setNotes(todo?.notes ?? presetNotes ?? '');
     setRemindOn(!!todo?.remind_at);
     setRemindDate(todo?.remind_at ? new Date(todo.remind_at) : defaultRemind());
     setPicker(null);
-  }, [visible, todo]);
+  }, [visible, todo, presetTitle, presetNotes, presetCategoryId]);
 
   async function submit() {
     const t = title.trim();
@@ -92,8 +110,12 @@ export function TodoModal({ visible, todo, onClose, onSaved }: Props) {
       notifId = await scheduleReminder(remindDate, 'Rappel', t);
     }
 
-    if (todo) updateTodo(todo.id, t, notes, categoryId, priority, remindAt, notifId);
-    else addTodo(t, notes, categoryId, priority, remindAt, notifId);
+    if (todo) {
+      updateTodo(todo.id, t, notes, categoryId, priority, remindAt, notifId);
+    } else {
+      const id = addTodo(t, notes, categoryId, priority, remindAt, notifId);
+      if (linkEventId != null) linkTodoToEvent(linkEventId, id);
+    }
 
     setSaving(false);
     onSaved();
@@ -110,6 +132,9 @@ export function TodoModal({ visible, todo, onClose, onSaved }: Props) {
         onPress: async () => {
           await cancelReminder(todo.notif_id);
           deleteTodo(todo.id);
+          // Supprimer la dernière tâche d'un événement supprime l'événement : ses
+          // rappels ne doivent pas sonner pour rien.
+          void syncEventReminders();
           onSaved();
           onClose();
         },
@@ -132,8 +157,17 @@ export function TodoModal({ visible, todo, onClose, onSaved }: Props) {
               placeholder="Que faut-il faire ?"
               placeholderTextColor={c.textMuted}
               style={styles.input}
-              autoFocus={!todo}
+              autoFocus={!todo && !presetTitle}
             />
+
+            {!todo && linkEventId != null && (
+              <View style={styles.linkNote}>
+                <Ionicons name="link-outline" size={14} color={c.aurora} />
+                <Text style={styles.linkNoteText}>
+                  Liée à l’événement : cocher l’une coche l’autre
+                </Text>
+              </View>
+            )}
 
             <Text style={styles.label}>Catégorie</Text>
             <CategoryPicker value={categoryId} onChange={setCategoryId} />
@@ -249,6 +283,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     fontSize: font.body, color: c.text,
   },
   multiline: { minHeight: 64, textAlignVertical: 'top', marginTop: 0 },
+  linkNote: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.sm },
+  linkNoteText: { fontSize: font.small, color: c.aurora },
   label: { fontSize: font.small, color: c.textMuted, marginTop: spacing.md, marginBottom: spacing.xs },
   remindRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

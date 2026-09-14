@@ -12,10 +12,17 @@
  * Schéma :
  *   habits(id, name, description, color, created_at)
  *   completions(id, habit_id, day)   -- une ligne = « habit validé ce jour-là »
- *   events(id, title, day, end_day, start, end, category_id, calendar_id, location, todo_id*)
+ *   events(id, title, day, end_day, start, end, category_id, calendar_id, location,
+ *          reminders, reminder_alarm, todo_id*)
  *   event_todos(event_id, todo_id)   -- lien N..N entre événements et to-dos
- *   calendars(id, name, url, color)  -- abonnements .ics (agendas externes)
+ *   calendars(id, name, url, color, reminders, reminder_alarm)  -- abonnements .ics
  *   settings(key, value)             -- réglages de l'app (clé → valeur texte)
+ *
+ *   `reminders` est une liste de minutes AVANT le début, en texte ("0,15,60" ;
+ *   '' = aucun rappel), et `reminder_alarm` dit si ces rappels sonnent comme une
+ *   alarme (1) ou comme une simple notification (0). Un événement perso porte
+ *   ses propres rappels ; un événement d'abonnement, réécrit à chaque synchro,
+ *   ne peut rien garder : il prend ceux de son ABONNEMENT (voir EVENT_SELECT).
  *
  *   `events.calendar_id` distingue les deux origines : NULL = un événement créé
  *   dans l'app (modifiable), sinon l'abonnement .ics qui l'a apporté. Ces
@@ -61,6 +68,8 @@ export type EventItem = {
   calendar_id: number | null; // non nul = importé d'un abonnement .ics (lecture seule)
   location: string; // lieu, renseigné seulement par les abonnements .ics ('' sinon)
   color: string | null; // couleur de la catégorie, sinon celle de l'abonnement
+  reminders: number[]; // rappels, en minutes avant le début (ceux de l'abonnement s'il en vient)
+  reminder_alarm: number; // 1 = les rappels sonnent comme une alarme
   todo_ids: number[]; // to-dos liés à cet événement (0, 1 ou plusieurs)
   todo_done: number; // combien de ces to-dos sont cochés
   done: number; // 1 si l'événement a des to-dos liés et qu'ils sont TOUS faits
@@ -202,6 +211,13 @@ export function initDatabase(): void {
 
   // V6 → V7 : un événement importé peut porter un lieu (LOCATION du .ics).
   ensureColumn('events', 'location', "location TEXT NOT NULL DEFAULT ''");
+
+  // V7 → V8 : rappels avant un événement — sur l'événement perso, ou sur
+  // l'abonnement pour tous ses événements.
+  ensureColumn('events', 'reminders', "reminders TEXT NOT NULL DEFAULT ''");
+  ensureColumn('events', 'reminder_alarm', 'reminder_alarm INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('calendars', 'reminders', "reminders TEXT NOT NULL DEFAULT ''");
+  ensureColumn('calendars', 'reminder_alarm', 'reminder_alarm INTEGER NOT NULL DEFAULT 0');
 
   // V5 → V6 : chaque habitude dit si elle est citée dans le rappel quotidien.
   ensureColumn('habits', 'notify', 'notify INTEGER NOT NULL DEFAULT 1');
@@ -362,12 +378,17 @@ export function daysUntilCanAddHabit(): number {
  * Sélection commune : on joint la catégorie (couleur) et on agrège les to-dos
  * liés — leurs ids (chaîne "3,7,12") et le nombre d'entre eux déjà cochés.
  * `end_day` est normalisé : jamais NULL, même pour une ligne d'avant la V4.
+ * Les rappels sont ceux qui s'APPLIQUENT : ceux de l'événement s'il est perso,
+ * ceux de son abonnement sinon.
  */
 const EVENT_SELECT = `
   SELECT e.id, e.title, e.day, COALESCE(e.end_day, e.day) AS end_day,
          e.start, e.end, e.category_id, e.calendar_id,
          COALESCE(e.location, '') AS location,
          COALESCE(c.color, cal.color) AS color,
+         CASE WHEN e.calendar_id IS NULL THEN e.reminders ELSE cal.reminders END AS reminders_csv,
+         CASE WHEN e.calendar_id IS NULL THEN e.reminder_alarm ELSE cal.reminder_alarm END
+           AS reminder_alarm,
          (SELECT group_concat(et.todo_id)
             FROM event_todos et WHERE et.event_id = e.id) AS todo_ids_csv,
          (SELECT COUNT(*)
@@ -380,16 +401,22 @@ const EVENT_SELECT = `
 `;
 
 /** La ligne brute renvoyée par EVENT_SELECT (avant mise en forme). */
-type EventRow = Omit<EventItem, 'todo_ids' | 'done'> & { todo_ids_csv: string | null };
+type EventRow = Omit<EventItem, 'todo_ids' | 'done' | 'reminders' | 'reminder_alarm'> & {
+  todo_ids_csv: string | null;
+  reminders_csv: string | null;
+  reminder_alarm: number | null;
+};
 
-/** Met une ligne brute en forme : ids en tableau, `done` calculé. */
+/** Met une ligne brute en forme : ids et rappels en tableaux, `done` calculé. */
 function mapEvent(row: EventRow): EventItem {
   const ids = row.todo_ids_csv
     ? row.todo_ids_csv.split(',').map(Number).filter((n) => !Number.isNaN(n))
     : [];
-  const { todo_ids_csv, ...rest } = row;
+  const { todo_ids_csv, reminders_csv, ...rest } = row;
   return {
     ...rest,
+    reminders: parseReminders(reminders_csv),
+    reminder_alarm: row.reminder_alarm ?? 0,
     todo_ids: ids,
     // Un événement n'est « fait » que s'il a des to-dos liés et qu'ils le sont tous.
     done: ids.length > 0 && row.todo_done === ids.length ? 1 : 0,
@@ -545,10 +572,45 @@ export function getEventDaysInRange(
   return map;
 }
 
+// --- Rappels --------------------------------------------------------------
+
+/** Lit une liste de rappels stockée ("0,15,60") : minutes, sans doublon, croissantes. */
+function parseReminders(csv: string | null): number[] {
+  if (!csv) return [];
+  const mins = csv
+    .split(',')
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n >= 0);
+  return [...new Set(mins)].sort((a, b) => a - b);
+}
+
+/** Met une liste de rappels au format stocké ("0,15,60"). */
+function formatReminders(minutes: number[]): string {
+  return parseReminders(minutes.join(',')).join(',');
+}
+
 /**
- * Ajoute un événement à l'agenda, avec ses to-dos liés. Renvoie son id.
- * `endDay` est le dernier jour de l'événement (= `day` s'il tient sur un jour) ;
- * une valeur antérieure à `day` est ramenée à `day`.
+ * Les événements qui COMMENCENT dans une plage de jours et portent au moins un
+ * rappel (le leur, ou celui de leur abonnement). Sert à programmer les
+ * notifications : les filtres de l'agenda n'ont rien à y voir, ils ne jouent
+ * que sur l'affichage.
+ */
+export function getEventsWithReminders(startDay: string, endDay: string): EventItem[] {
+  return db
+    .getAllSync<EventRow>(
+      `${EVENT_SELECT} WHERE e.day BETWEEN ? AND ?
+         AND (CASE WHEN e.calendar_id IS NULL THEN e.reminders ELSE cal.reminders END) <> ''
+       ORDER BY e.day ASC, e.start ASC`,
+      startDay,
+      endDay,
+    )
+    .map(mapEvent);
+}
+
+/**
+ * Ajoute un événement à l'agenda, avec ses to-dos liés et ses rappels. Renvoie
+ * son id. `endDay` est le dernier jour de l'événement (= `day` s'il tient sur un
+ * jour) ; une valeur antérieure à `day` est ramenée à `day`.
  */
 export function addEvent(
   title: string,
@@ -558,17 +620,22 @@ export function addEvent(
   end: string,
   categoryId: number | null = null,
   todoIds: number[] = [],
+  reminders: number[] = [],
+  reminderAlarm = false,
 ): number {
   let id = 0;
   db.withTransactionSync(() => {
     const res = db.runSync(
-      'INSERT INTO events (title, day, end_day, start, end, category_id) VALUES (?, ?, ?, ?, ?, ?)',
+      `INSERT INTO events (title, day, end_day, start, end, category_id, reminders, reminder_alarm)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       title.trim(),
       day,
       endDay < day ? day : endDay,
       start,
       end,
       categoryId,
+      formatReminders(reminders),
+      reminderAlarm ? 1 : 0,
     );
     id = res.lastInsertRowId;
     linkTodos(id, todoIds);
@@ -576,7 +643,7 @@ export function addEvent(
   return id;
 }
 
-/** Modifie un événement existant (titre, plage de jours, horaires, catégorie, to-dos liés). */
+/** Modifie un événement existant (titre, plage de jours, horaires, catégorie, to-dos liés, rappels). */
 export function updateEvent(
   id: number,
   title: string,
@@ -586,10 +653,13 @@ export function updateEvent(
   end: string,
   categoryId: number | null,
   todoIds: number[] = [],
+  reminders: number[] = [],
+  reminderAlarm = false,
 ): void {
   db.withTransactionSync(() => {
     db.runSync(
-      `UPDATE events SET title = ?, day = ?, end_day = ?, start = ?, end = ?, category_id = ?
+      `UPDATE events SET title = ?, day = ?, end_day = ?, start = ?, end = ?, category_id = ?,
+                         reminders = ?, reminder_alarm = ?
        WHERE id = ? AND calendar_id IS NULL`,
       title.trim(),
       day,
@@ -597,6 +667,8 @@ export function updateEvent(
       start,
       end,
       categoryId,
+      formatReminders(reminders),
+      reminderAlarm ? 1 : 0,
       id,
     );
     db.runSync('DELETE FROM event_todos WHERE event_id = ?', id);
@@ -613,6 +685,21 @@ function linkTodos(eventId: number, todoIds: number[]): void {
       todoId,
     );
   }
+}
+
+/**
+ * Rattache un to-do à un événement PERSO (cocher l'un coche l'autre). Sans effet
+ * sur un événement d'abonnement : il est réécrit à chaque synchronisation, le
+ * lien serait perdu à la suivante.
+ */
+export function linkTodoToEvent(eventId: number, todoId: number): void {
+  db.runSync(
+    `INSERT OR IGNORE INTO event_todos (event_id, todo_id)
+     SELECT ?, ? WHERE EXISTS (SELECT 1 FROM events WHERE id = ? AND calendar_id IS NULL)`,
+    eventId,
+    todoId,
+    eventId,
+  );
 }
 
 /** Supprime un événement (les to-dos liés, eux, restent dans la liste). */
@@ -633,9 +720,19 @@ export type CalendarSub = {
   name: string;
   url: string;
   color: string; // couleur de TOUS les événements de cet abonnement
+  reminders: number[]; // rappels appliqués à TOUS ses événements (minutes avant)
+  reminder_alarm: number; // 1 = ces rappels sonnent comme une alarme
   last_sync: string | null; // "YYYY-MM-DD HH:MM" locale, ou null si jamais synchronisé
   created_at: string;
 };
+
+/** La ligne brute d'un abonnement (rappels encore en texte). */
+type CalendarRow = Omit<CalendarSub, 'reminders'> & { reminders: string | null };
+
+/** Met une ligne d'abonnement en forme. */
+function mapCalendar(row: CalendarRow): CalendarSub {
+  return { ...row, reminders: parseReminders(row.reminders), reminder_alarm: row.reminder_alarm ?? 0 };
+}
 
 /** Un événement lu dans un fichier .ics, prêt à être rangé en base. */
 export type ImportedEvent = {
@@ -649,33 +746,52 @@ export type ImportedEvent = {
 
 /** Les abonnements, du plus ancien au plus récent. */
 export function getCalendars(): CalendarSub[] {
-  return db.getAllSync<CalendarSub>('SELECT * FROM calendars ORDER BY id ASC');
+  return db.getAllSync<CalendarRow>('SELECT * FROM calendars ORDER BY id ASC').map(mapCalendar);
 }
 
 /** Un abonnement par son id (null s'il vient d'être supprimé). */
 export function getCalendar(id: number): CalendarSub | null {
-  return db.getFirstSync<CalendarSub>('SELECT * FROM calendars WHERE id = ?', id) ?? null;
+  const row = db.getFirstSync<CalendarRow>('SELECT * FROM calendars WHERE id = ?', id);
+  return row ? mapCalendar(row) : null;
 }
 
 /** Crée un abonnement (sans rien télécharger) et renvoie son id. */
-export function addCalendar(name: string, url: string, color: string): number {
+export function addCalendar(
+  name: string,
+  url: string,
+  color: string,
+  reminders: number[] = [],
+  reminderAlarm = false,
+): number {
   const r = db.runSync(
-    'INSERT INTO calendars (name, url, color, last_sync, created_at) VALUES (?, ?, ?, NULL, ?)',
+    `INSERT INTO calendars (name, url, color, reminders, reminder_alarm, last_sync, created_at)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)`,
     name.trim(),
     url.trim(),
     color,
+    formatReminders(reminders),
+    reminderAlarm ? 1 : 0,
     todayKey(),
   );
   return r.lastInsertRowId;
 }
 
-/** Renomme / recolore / repointe un abonnement. */
-export function updateCalendar(id: number, name: string, url: string, color: string): void {
+/** Renomme / recolore / repointe un abonnement, et règle les rappels de ses événements. */
+export function updateCalendar(
+  id: number,
+  name: string,
+  url: string,
+  color: string,
+  reminders: number[] = [],
+  reminderAlarm = false,
+): void {
   db.runSync(
-    'UPDATE calendars SET name = ?, url = ?, color = ? WHERE id = ?',
+    'UPDATE calendars SET name = ?, url = ?, color = ?, reminders = ?, reminder_alarm = ? WHERE id = ?',
     name.trim(),
     url.trim(),
     color,
+    formatReminders(reminders),
+    reminderAlarm ? 1 : 0,
     id,
   );
 }
@@ -1160,8 +1276,8 @@ export function setSetting(key: string, value: string | null): void {
 //  EXPORT / IMPORT (sauvegarde anti-réinstallation)
 // ===========================================================================
 
-/** Version du format d'export (7 = lieu des événements importés). */
-export const BACKUP_VERSION = 7;
+/** Version du format d'export (8 = rappels des événements et des abonnements). */
+export const BACKUP_VERSION = 8;
 
 type Backup = {
   version: number;

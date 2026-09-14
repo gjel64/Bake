@@ -1,8 +1,8 @@
 /**
  * App.tsx — le composant racine (V3, look iOS).
  *
- * Initialise la base, les notifications et le rappel quotidien des habitudes,
- * puis pose une tab bar FLOTTANTE
+ * Initialise la base, les notifications, le rappel quotidien des habitudes et
+ * les rappels d'événements, puis pose une tab bar FLOTTANTE
  * arrondie (détachée du bord, icônes seules, tap uniquement). Le thème
  * (clair / sombre) vient de `ThemeProvider` : l'apparence choisie dans les
  * Réglages, ou celle du téléphone tant qu'on est en « Système ».
@@ -29,6 +29,7 @@ import { StatsScreen } from '@/screens/StatsScreen';
 import { initDatabase } from '@/db/database';
 import { initNotifications } from '@/lib/notifications';
 import { syncHabitsReminder } from '@/lib/habitsReminder';
+import { syncEventReminders } from '@/lib/eventReminders';
 import { ThemeProvider, darkColors, lightColors, useIsDark } from '@/theme';
 
 /** Icônes d'onglet : pleine si actif, contour sinon (convention iOS). */
@@ -57,8 +58,9 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     // Canaux + permission d'abord, puis on remet le rappel quotidien des
-    // habitudes en place (réinstallation, restauration de sauvegarde…).
-    initNotifications().then(syncHabitsReminder);
+    // habitudes en place (réinstallation, restauration de sauvegarde…), et on
+    // fait avancer la fenêtre des rappels d'événements.
+    initNotifications().then(syncHabitsReminder).then(syncEventReminders);
   }, []);
 
   return (
