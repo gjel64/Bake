@@ -16,7 +16,8 @@
  *
  * `syncHabitsReminder()` est le point d'entrée à rejouer dès que le réglage OU
  * la liste des habitudes citées a pu bouger : au démarrage, après l'ajout d'une
- * habitude, après un changement de sélection, et après l'import d'une
+ * habitude, son archivage ou sa remise (une habitude archivée n'est plus
+ * citée), après un changement de sélection, et après l'import d'une
  * sauvegarde (qui peut aussi bien poser une autre heure que couper le rappel).
  */
 

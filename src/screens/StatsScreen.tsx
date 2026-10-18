@@ -6,7 +6,12 @@
  * sections apparaissent en cascade (animations d'entrée Reanimated).
  *
  * L'anneau donne la vue d'ensemble, la section « Par habitude » donne le
- * détail : le taux global cache toujours l'habitude qu'on laisse filer.
+ * détail : le taux global cache toujours l'habitude qu'on laisse filer. On
+ * touche une ligne pour ouvrir la fiche complète (`HabitDetailModal`).
+ *
+ * Les habitudes archivées (« supprimées ») restent dans toutes les stats
+ * globales — leurs validations passées sont gardées — et en bas de la liste
+ * « Par habitude », grisées : c'est depuis leur fiche qu'on les remet.
  */
 
 import { useCallback, useState } from 'react';
@@ -17,6 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 import { GradientHeader } from '@/components/GradientHeader';
+import { HabitDetailModal } from '@/components/HabitDetailModal';
 import { SettingsModal } from '@/components/SettingsModal';
 import { ScreenBackground } from '@/components/ui/ScreenBackground';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -26,11 +32,10 @@ import { MiniBars, BarDatum } from '@/components/ui/MiniBars';
 import { Heatmap, HeatCell } from '@/components/ui/Heatmap';
 import {
   HabitStat,
-  countCompletedToday,
-  getAllHabits,
   getCompletionCountsInRange,
   getHabitStats,
   getHabitStreak,
+  getHabitsRate,
   getLongestMeditationSeconds,
   getMeditationSecondsInRange,
   getMeditationSessionCount,
@@ -49,6 +54,8 @@ import { font, spacing, useC, type Palette } from '@/theme';
 /** Pas d'un carré de jour (détail par habitude) et écart entre deux carrés. */
 const HABIT_CELL = 18;
 const HABIT_GAP = 4;
+/** Taille du chevron en bout de ligne (une ligne s'ouvre sur sa fiche). */
+const HABIT_CHEVRON = 14;
 
 // --- Petits utilitaires de mise en forme ---------------------------------
 
@@ -63,10 +70,6 @@ function formatDuration(totalSec: number): string {
 function weekdayLetter(dayKey: string): string {
   const idx = (fromDayKey(dayKey).getDay() + 6) % 7; // 0 = lundi
   return WEEKDAYS_SHORT[idx];
-}
-
-function clamp01(x: number): number {
-  return Math.max(0, Math.min(1, x));
 }
 
 /** Les lettres des 7 derniers jours (le dernier étant aujourd'hui). */
@@ -95,19 +98,13 @@ type Stats = {
 /** Rassemble toutes les statistiques depuis la base. */
 function computeStats(): Stats {
   const today = todayKey();
-  const totalHabits = getAllHabits().length;
 
-  // Taux du jour.
-  const todayRate = totalHabits > 0 ? countCompletedToday() / totalHabits : 0;
-
-  // Taux sur 7 et 30 jours : validations / (habitudes × jours).
-  const sumRange = (days: number) => {
-    const start = addDays(today, -(days - 1));
-    const counts = getCompletionCountsInRange(start, today);
-    return Object.values(counts).reduce((a, b) => a + b, 0);
-  };
-  const rate7 = totalHabits > 0 ? clamp01(sumRange(7) / (totalHabits * 7)) : 0;
-  const rate30 = totalHabits > 0 ? clamp01(sumRange(30) / (totalHabits * 30)) : 0;
+  // Taux du jour, sur 7 et 30 jours : validations / habitudes attendues, jour
+  // par jour (une habitude ne compte que les jours où elle existait et n'était
+  // pas archivée — voir `getHabitsRate`).
+  const todayRate = getHabitsRate(1);
+  const rate7 = getHabitsRate(7);
+  const rate30 = getHabitsRate(30);
 
   // Méditation — 7 derniers jours (minutes/jour).
   const start7 = addDays(today, -6);
@@ -160,6 +157,7 @@ export function StatsScreen() {
   const styles = makeStyles(c);
   const [s, setS] = useState<Stats | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [detailId, setDetailId] = useState<number | null>(null); // fiche d'habitude ouverte
 
   const reload = useCallback(() => setS(computeStats()), []);
   useFocusEffect(reload);
@@ -183,6 +181,12 @@ export function StatsScreen() {
             setSettingsOpen(false);
             reload();
           }}
+        />
+
+        <HabitDetailModal
+          habitId={detailId}
+          onClose={() => setDetailId(null)}
+          onChanged={reload}
         />
 
         {s && (
@@ -249,12 +253,12 @@ export function StatsScreen() {
                     </View>
 
                     {s.habits.map((habit) => (
-                      <HabitRow key={habit.id} habit={habit} />
+                      <HabitRow key={habit.id} habit={habit} onPress={() => setDetailId(habit.id)} />
                     ))}
                   </View>
 
                   <Text style={styles.legend}>
-                    carrés : les sept derniers jours · % : sur 30 jours, ou depuis la création
+                    carrés : les sept derniers jours · % : sur 30 jours, ou depuis la création · touche une habitude pour son détail
                   </Text>
                 </GlassCard>
               </Animated.View>
@@ -309,13 +313,21 @@ export function StatsScreen() {
 /**
  * Une habitude : son nom, ses sept derniers jours en carrés, son taux sur
  * 30 jours et sa série en cours. Les carrés prennent la COULEUR de l'habitude,
- * pour qu'on la retrouve d'un coup d'œil depuis l'onglet Habitudes.
+ * pour qu'on la retrouve d'un coup d'œil depuis l'onglet Habitudes. Une
+ * habitude archivée est grisée et le dit à la place de sa série.
  */
-function HabitRow({ habit }: { habit: HabitStat }) {
+function HabitRow({ habit, onPress }: { habit: HabitStat; onPress: () => void }) {
   const c = useC();
   const styles = makeStyles(c);
   return (
-    <View style={styles.habitRow}>
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.habitRow,
+        habit.archived && styles.habitArchived,
+        pressed && { opacity: 0.6 },
+      ]}
+    >
       <View style={[styles.habitDot, { backgroundColor: habit.color }]} />
 
       <View style={styles.habitMain}>
@@ -334,21 +346,31 @@ function HabitRow({ habit }: { habit: HabitStat }) {
               />
             ))}
           </View>
-          {habit.streak > 0 && (
-            <View style={styles.habitStreak}>
-              <Ionicons name="flame" size={11} color={c.amber} />
-              <Text style={styles.habitStreakText}>{habit.streak}</Text>
-            </View>
+          {habit.archived ? (
+            <Text style={styles.habitArchivedText}>archivée</Text>
+          ) : (
+            habit.streak > 0 && (
+              <View style={styles.habitStreak}>
+                <Ionicons name="flame" size={11} color={c.amber} />
+                <Text style={styles.habitStreakText}>{habit.streak}</Text>
+              </View>
+            )
           )}
         </View>
       </View>
 
       <View style={styles.habitRight}>
-        <Text style={styles.habitRate}>{Math.round(habit.rate * 100)} %</Text>
-        {/* Une habitude jeune n'a pas 30 jours d'histoire : on le dit. */}
-        {habit.window < 30 && <Text style={styles.habitWindow}>{habit.window} j</Text>}
+        <Text style={styles.habitRate}>
+          {habit.rate === null ? '—' : `${Math.round(habit.rate * 100)} %`}
+        </Text>
+        {/* Une habitude jeune, ou remise après une pause, n'a pas 30 jours
+            d'histoire : on le dit. */}
+        {habit.rate !== null && habit.window < 30 && (
+          <Text style={styles.habitWindow}>{habit.window} j</Text>
+        )}
       </View>
-    </View>
+      <Ionicons name="chevron-forward" size={HABIT_CHEVRON} color={c.textFaint} />
+    </Pressable>
   );
 }
 
@@ -423,7 +445,14 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     color: c.textFaint,
     fontWeight: '600',
   },
-  habitHeadRate: { flex: 1, textAlign: 'right', fontSize: font.tiny, color: c.textFaint },
+  habitHeadRate: {
+    flex: 1,
+    textAlign: 'right',
+    fontSize: font.tiny,
+    color: c.textFaint,
+    // Aligné sur la colonne des taux, qui précède le chevron et son écart.
+    paddingRight: HABIT_CHEVRON + spacing.sm,
+  },
   habitRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -444,6 +473,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   habitStreak: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   habitStreakText: { fontSize: font.tiny, fontWeight: '700', color: c.amber },
+  habitArchived: { opacity: 0.55 },
+  habitArchivedText: { fontSize: font.tiny, fontStyle: 'italic', color: c.textMuted },
   habitRight: { alignItems: 'flex-end', minWidth: 44 },
   habitRate: { fontSize: font.body, fontWeight: '700', color: c.text },
   habitWindow: { fontSize: font.tiny, color: c.textFaint },

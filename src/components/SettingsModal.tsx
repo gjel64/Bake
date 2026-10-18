@@ -31,7 +31,7 @@ import {
   Category,
   Habit,
   deleteCategory,
-  getAllHabits,
+  getActiveHabits,
   getCalendars,
   getCategories,
   setHabitNotify,
@@ -117,7 +117,7 @@ export function SettingsModal({
     setCats(getCategories());
     setReminder(getHabitsReminderTime());
     setCalendars(getCalendars());
-    setHabits(getAllHabits());
+    setHabits(getActiveHabits());
   };
 
   /** Relance le téléchargement d'un abonnement et dit ce qu'il en est. */

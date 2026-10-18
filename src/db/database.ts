@@ -10,8 +10,9 @@
  * exportées ci-dessous. C'est notre unique « API de données ».
  *
  * Schéma :
- *   habits(id, name, description, color, created_at)
+ *   habits(id, name, description, color, created_at, notify)
  *   completions(id, habit_id, day)   -- une ligne = « habit validé ce jour-là »
+ *   habit_pauses(id, habit_id, from_day, to_day)  -- périodes où une habitude était archivée
  *   events(id, title, day, end_day, start, end, category_id, calendar_id, location,
  *          reminders, reminder_alarm, todo_id*)
  *   event_todos(event_id, todo_id)   -- lien N..N entre événements et to-dos
@@ -34,6 +35,14 @@
  *   du premier jour, `end` celle du dernier ; les jours intermédiaires d'un
  *   événement long comptent comme des journées entières.
  *
+ *   Une habitude n'est jamais supprimée : « supprimer » l'ARCHIVE, et ses
+ *   validations restent (stats globales, historique). L'archivage ouvre une
+ *   ligne `habit_pauses` (to_day NULL), la remise en place la referme. Une
+ *   pause couvre les jours [from_day, to_day[ : ces jours-là, l'habitude n'est
+ *   pas attendue et ne compte pas dans les taux. Une habitude remise garde son
+ *   historique, mais sa SÉRIE repart à 0 : elle ne remonte jamais avant le
+ *   dernier `to_day` (voir `habitStreak`).
+ *
  *   (*) events.todo_id est un vestige de la V2 (un seul to-do par événement).
  *   Il est vidé au démarrage par `migrateEventTodoLinks()` au profit de la
  *   table `event_todos`. On ne le supprime pas : les bases déjà installées et
@@ -55,6 +64,7 @@ export type Habit = {
   color: string;
   created_at: string; // "YYYY-MM-DD"
   notify: number; // 1 = citée dans le rappel quotidien, 0 = ignorée
+  archived_since: string | null; // jour de l'archivage, null = habitude en cours
 };
 
 export type EventItem = {
@@ -197,6 +207,13 @@ export function initDatabase(): void {
       last_sync  TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS habit_pauses (
+      id       INTEGER PRIMARY KEY AUTOINCREMENT,
+      habit_id INTEGER NOT NULL,
+      from_day TEXT NOT NULL,
+      to_day   TEXT
+    );
   `);
 
   // Migration douce : ajoute les colonnes manquantes à `events` (V1 → V2).
@@ -289,28 +306,70 @@ function migrateEventEndDay(): void {
 // ===========================================================================
 
 /**
- * Les habitudes RESTANT à valider aujourd'hui : celles qui n'ont pas encore
- * de ligne `completions` pour la date du jour. C'est exactement ce qu'affiche
- * la page d'accueil (une habitude validée disparaît jusqu'à demain).
+ * Sélection commune des habitudes : la ligne de `habits`, plus le jour où elle
+ * a été archivée (sa pause encore ouverte) — NULL si elle est en cours.
+ */
+const HABIT_SELECT = `
+  SELECT h.*,
+         (SELECT p.from_day FROM habit_pauses p
+          WHERE p.habit_id = h.id AND p.to_day IS NULL) AS archived_since
+  FROM habits h`;
+
+/** Les ids des habitudes archivées (pause encore ouverte), pour les écarter en SQL. */
+const ARCHIVED_IDS = 'SELECT habit_id FROM habit_pauses WHERE to_day IS NULL';
+
+/**
+ * Les habitudes RESTANT à valider aujourd'hui : celles en cours (pas archivées)
+ * qui n'ont pas encore de ligne `completions` pour la date du jour. C'est
+ * exactement ce qu'affiche la page d'accueil (une habitude validée disparaît
+ * jusqu'à demain).
  */
 export function getPendingHabits(): Habit[] {
   const day = todayKey();
   return db.getAllSync<Habit>(
-    `SELECT h.* FROM habits h
-     WHERE h.id NOT IN (SELECT habit_id FROM completions WHERE day = ?)
+    `${HABIT_SELECT}
+     WHERE h.id NOT IN (${ARCHIVED_IDS})
+       AND h.id NOT IN (SELECT habit_id FROM completions WHERE day = ?)
      ORDER BY h.created_at ASC, h.id ASC`,
     day,
   );
 }
 
-/** Toutes les habitudes, quel que soit leur état (utile pour un total). */
+/** Toutes les habitudes, archivées comprises (les stats gardent leur historique). */
 export function getAllHabits(): Habit[] {
-  return db.getAllSync<Habit>('SELECT * FROM habits ORDER BY id ASC');
+  return db.getAllSync<Habit>(`${HABIT_SELECT} ORDER BY h.id ASC`);
 }
 
-/** Les habitudes à citer dans le rappel quotidien (celles cochées dans les réglages). */
+/** Les habitudes en cours : celles de la page d'accueil, sans les archivées. */
+export function getActiveHabits(): Habit[] {
+  return db.getAllSync<Habit>(
+    `${HABIT_SELECT} WHERE h.id NOT IN (${ARCHIVED_IDS}) ORDER BY h.id ASC`,
+  );
+}
+
+/** Les habitudes archivées, qu'on peut remettre quand on veut. */
+export function getArchivedHabits(): Habit[] {
+  return db.getAllSync<Habit>(
+    `${HABIT_SELECT} WHERE h.id IN (${ARCHIVED_IDS}) ORDER BY h.id ASC`,
+  );
+}
+
+/** Une habitude par son id, archivée ou non (null si elle n'existe pas). */
+export function getHabit(habitId: number): Habit | null {
+  return db.getFirstSync<Habit>(`${HABIT_SELECT} WHERE h.id = ?`, habitId);
+}
+
+/**
+ * Les habitudes à citer dans le rappel quotidien : cochées dans les réglages
+ * ET en cours. Une habitude archivée garde son choix pour le jour où on la
+ * remet, mais n'est plus rappelée.
+ */
 export function getNotifiedHabits(): Habit[] {
-  return db.getAllSync<Habit>('SELECT * FROM habits WHERE notify = 1 ORDER BY id ASC');
+  return db.getAllSync<Habit>(
+    `${HABIT_SELECT}
+     WHERE h.notify = 1 AND h.id NOT IN (${ARCHIVED_IDS})
+     ORDER BY h.id ASC`,
+  );
 }
 
 /** Coche / décoche une habitude dans le rappel quotidien. */
@@ -318,10 +377,11 @@ export function setHabitNotify(habitId: number, notify: boolean): void {
   db.runSync('UPDATE habits SET notify = ? WHERE id = ?', notify ? 1 : 0, habitId);
 }
 
-/** Combien d'habitudes ont déjà été validées aujourd'hui. */
+/** Combien d'habitudes en cours ont déjà été validées aujourd'hui. */
 export function countCompletedToday(): number {
   const row = db.getFirstSync<{ n: number }>(
-    'SELECT COUNT(*) AS n FROM completions WHERE day = ?',
+    `SELECT COUNT(*) AS n FROM completions
+     WHERE day = ? AND habit_id NOT IN (${ARCHIVED_IDS})`,
     todayKey(),
   );
   return row?.n ?? 0;
@@ -352,22 +412,174 @@ export function completeHabit(habitId: number): void {
 }
 
 /**
- * Règle « une seule création tous les 30 jours ».
- * On regarde la date de création la plus récente parmi les habitudes.
- * Renvoie le nombre de jours restant à attendre (0 = on peut créer maintenant).
+ * « Supprime » une habitude : elle quitte la page d'accueil et le rappel, mais
+ * rien n'est effacé — ses validations restent dans les stats, et elle peut être
+ * remise à tout moment (`restoreHabit`). Sans effet si elle est déjà archivée.
  */
-export function daysUntilCanAddHabit(): number {
-  const row = db.getFirstSync<{ last: string | null }>(
-    'SELECT MAX(created_at) AS last FROM habits',
+export function archiveHabit(habitId: number): void {
+  const habit = getHabit(habitId);
+  if (!habit || habit.archived_since !== null) return;
+  db.runSync(
+    'INSERT INTO habit_pauses (habit_id, from_day) VALUES (?, ?)',
+    habitId,
+    todayKey(),
   );
-  if (!row?.last) return 0; // aucune habitude encore : autorisé
+}
 
-  const COOLDOWN = 30;
-  const last = new Date(row.last).getTime();
-  const now = new Date(todayKey()).getTime();
-  const elapsed = Math.floor((now - last) / 86_400_000);
-  const remaining = COOLDOWN - elapsed;
-  return remaining > 0 ? remaining : 0;
+/**
+ * Remet une habitude archivée : sa pause se referme aujourd'hui, elle est de
+ * nouveau attendue dès ce jour, et sa série repart à 0. Archivée puis remise
+ * le même jour, la pause ne couvre aucun jour, mais on la GARDE : c'est elle
+ * qui dit où la série redémarre (sinon archiver-remettre ne la casserait pas).
+ */
+export function restoreHabit(habitId: number): void {
+  db.runSync(
+    'UPDATE habit_pauses SET to_day = ? WHERE habit_id = ? AND to_day IS NULL',
+    todayKey(),
+    habitId,
+  );
+}
+
+/** Une période d'archivage : les jours [from, to[ (to null = toujours archivée). */
+type Pause = { from: string; to: string | null };
+
+/** Toutes les pauses, rangées par habitude. */
+function pausesByHabit(): Map<number, Pause[]> {
+  const rows = db.getAllSync<{ habit_id: number; from_day: string; to_day: string | null }>(
+    'SELECT habit_id, from_day, to_day FROM habit_pauses',
+  );
+  const map = new Map<number, Pause[]>();
+  for (const r of rows) {
+    const list = map.get(r.habit_id) ?? [];
+    list.push({ from: r.from_day, to: r.to_day });
+    map.set(r.habit_id, list);
+  }
+  return map;
+}
+
+/** Toutes les validations, rangées par habitude : l'ensemble de ses jours validés. */
+function completionsByHabit(): Map<number, Set<string>> {
+  const rows = db.getAllSync<{ habit_id: number; day: string }>(
+    'SELECT DISTINCT habit_id, day FROM completions',
+  );
+  const map = new Map<number, Set<string>>();
+  for (const r of rows) {
+    const days = map.get(r.habit_id) ?? new Set<string>();
+    days.add(r.day);
+    map.set(r.habit_id, days);
+  }
+  return map;
+}
+
+/**
+ * Vrai si l'habitude était ATTENDUE ce jour-là : déjà créée, et pas en pause.
+ * C'est la base de tous les taux — un jour où elle n'existait pas encore, ou
+ * était archivée, n'est ni réussi ni manqué.
+ */
+function isExpectedOn(habit: Habit, pauses: Pause[] | undefined, day: string): boolean {
+  if (day < habit.created_at) return false;
+  return !(pauses ?? []).some((p) => p.from <= day && (p.to === null || day < p.to));
+}
+
+/**
+ * Série en cours sur un ensemble de jours validés : les jours consécutifs en
+ * remontant depuis aujourd'hui s'il est validé, sinon depuis hier — la journée
+ * en cours ne casse pas une série tant qu'elle n'est pas finie. Elle ne
+ * remonte pas avant `since` (inclus) quand il est donné.
+ */
+function streakOf(
+  done: Set<string> | undefined,
+  today: string,
+  since: string | null = null,
+): number {
+  if (!done) return 0;
+  let cursor = done.has(today) ? today : addDays(today, -1);
+  let streak = 0;
+  while (done.has(cursor) && (since === null || cursor >= since)) {
+    streak += 1;
+    cursor = addDays(cursor, -1);
+  }
+  return streak;
+}
+
+/**
+ * Série en cours d'UNE habitude. Une habitude archivée n'en a pas ; une
+ * habitude remise repart à 0 le jour de sa dernière remise — son historique
+ * (record, total, calendrier) reste, mais la série ne remonte pas au-delà.
+ */
+function habitStreak(
+  done: Set<string> | undefined,
+  pauses: Pause[] | undefined,
+  today: string,
+): number {
+  let since: string | null = null;
+  for (const p of pauses ?? []) {
+    if (p.to === null) return 0;
+    if (since === null || p.to > since) since = p.to;
+  }
+  return streakOf(done, today, since);
+}
+
+/** Jours de suite qu'il faut à CHAQUE habitude en cours avant d'en ajouter une. */
+export const HABIT_UNLOCK_DAYS = 30;
+
+/** Attente obligatoire, en jours, entre deux créations d'habitude. */
+export const HABIT_ADD_COOLDOWN_DAYS = 30;
+
+/** Ce qui retient l'ajout d'une nouvelle habitude. */
+export type AddHabitLock = {
+  remaining: number; // jours avant de pouvoir ajouter (la plus longue des deux règles), 0 = permis
+  cooldown: number; // jours d'attente restant depuis la dernière création
+  streak: number; // jours sans faute encore nécessaires
+  weakest: string | null; // nom de l'habitude la plus en retard, null si la série ne bloque pas
+};
+
+/**
+ * Règle d'ajout : DEUX conditions, qui doivent être remplies ensemble.
+ *
+ * 1. Attente : 30 jours depuis la dernière CRÉATION d'habitude, archivées
+ *    comprises (une habitude n'est jamais effacée, sa date reste). Sans elle,
+ *    on pourrait en créer une, l'archiver, en créer une autre, puis remettre
+ *    la première — et accumuler les habitudes en un jour.
+ *
+ * 2. 100 % sur les 30 derniers jours : CHAQUE habitude en cours a été validée
+ *    chacun de ces 30 jours — sa série atteint 30. Compter en série (avec la
+ *    même tolérance pour la journée en cours que partout ailleurs) permet à
+ *    l'écran de dire combien de jours sans faute il reste. Une habitude remise
+ *    repart d'une série à 0 (`habitStreak`), même remise le jour de son
+ *    archivage : archiver ne met pas une série en réserve. Les habitudes
+ *    archivées ne comptent pas, seules celles de la liste.
+ *
+ * Sans aucune habitude créée, l'ajout est libre.
+ */
+export function getAddHabitLock(): AddHabitLock {
+  const done = completionsByHabit();
+  const pauses = pausesByHabit();
+  const today = todayKey();
+
+  const last = db.getFirstSync<{ last: string | null }>(
+    'SELECT MAX(created_at) AS last FROM habits',
+  )?.last;
+  const elapsed = last ? Math.max(0, daysBetween(last, today)) : HABIT_ADD_COOLDOWN_DAYS;
+  const cooldown = Math.max(0, HABIT_ADD_COOLDOWN_DAYS - elapsed);
+
+  let weakest: Habit | null = null;
+  let shortest = HABIT_UNLOCK_DAYS;
+  for (const habit of getActiveHabits()) {
+    const streak = habitStreak(done.get(habit.id), pauses.get(habit.id), today);
+    if (streak < shortest) {
+      shortest = streak;
+      weakest = habit;
+    }
+  }
+  const streak = HABIT_UNLOCK_DAYS - shortest;
+
+  return {
+    remaining: Math.max(cooldown, streak),
+    cooldown,
+    streak,
+    weakest: weakest?.name ?? null,
+  };
 }
 
 // ===========================================================================
@@ -910,97 +1122,199 @@ export function getCompletionCountsInRange(
  * Série en cours (streak) : nombre de jours consécutifs, en remontant depuis
  * aujourd'hui, où au moins une habitude a été validée. Si rien aujourd'hui mais
  * quelque chose hier, la série court encore (on ne la casse qu'après un jour
- * entier sans rien).
+ * entier sans rien). Les validations des habitudes archivées comptent : elles
+ * font partie de l'histoire.
  */
 export function getHabitStreak(): number {
-  // On récupère l'ensemble des jours ayant au moins une validation.
   const rows = db.getAllSync<{ day: string }>(
     'SELECT DISTINCT day FROM completions',
   );
-  const done = new Set(rows.map((r) => r.day));
-  if (done.size === 0) return 0;
-
-  const today = todayKey();
-  // Point de départ : aujourd'hui si validé, sinon hier (tolérance d'un jour).
-  let cursor = done.has(today) ? today : addDays(today, -1);
-  let streak = 0;
-  while (done.has(cursor)) {
-    streak += 1;
-    cursor = addDays(cursor, -1);
-  }
-  return streak;
+  return streakOf(new Set(rows.map((r) => r.day)), todayKey());
 }
 
-/** Le détail d'UNE habitude sur la page Stats. */
+/**
+ * La réussite d'une habitude sur les `span` derniers jours (aujourd'hui
+ * compris) : combien de jours elle était attendue, et combien de ces jours-là
+ * elle a été validée.
+ */
+function habitScore(
+  habit: Habit,
+  done: Set<string> | undefined,
+  pauses: Pause[] | undefined,
+  today: string,
+  span: number,
+): { hits: number; expected: number } {
+  let hits = 0;
+  let expected = 0;
+  for (let i = 0; i < span; i += 1) {
+    const day = addDays(today, -i);
+    if (!isExpectedOn(habit, pauses, day)) continue;
+    expected += 1;
+    if (done?.has(day)) hits += 1;
+  }
+  return { hits, expected };
+}
+
+/**
+ * Taux de réussite GLOBAL sur les `days` derniers jours (aujourd'hui compris,
+ * `days = 1` donne le taux du jour) : validations / habitudes attendues, jour
+ * par jour. Une habitude n'est attendue que les jours où elle existait et
+ * n'était pas archivée : une habitude créée avant-hier ou mise en pause ne
+ * plombe pas le taux, et une habitude archivée garde sa part du passé.
+ * Vaut 0 s'il n'y avait rien d'attendu.
+ */
+export function getHabitsRate(days: number): number {
+  const today = todayKey();
+  const done = completionsByHabit();
+  const pauses = pausesByHabit();
+  let hits = 0;
+  let expected = 0;
+  for (const habit of getAllHabits()) {
+    const score = habitScore(habit, done.get(habit.id), pauses.get(habit.id), today, days);
+    hits += score.hits;
+    expected += score.expected;
+  }
+  return expected > 0 ? hits / expected : 0;
+}
+
+/** Le résumé d'UNE habitude dans la liste « Par habitude » de la page Stats. */
 export type HabitStat = {
   id: number;
   name: string;
   color: string;
+  archived: boolean; // archivée (« supprimée ») : son historique reste visible
   week: boolean[]; // les 7 derniers jours, le dernier étant aujourd'hui
-  rate: number; // 0..1 sur les 30 derniers jours (voir plus bas)
-  window: number; // sur combien de jours ce taux est calculé (≤ 30)
-  streak: number; // jours consécutifs validés, même tolérance que `getHabitStreak`
+  rate: number | null; // 0..1 sur les 30 derniers jours (voir plus bas), null = jamais attendue
+  window: number; // combien de ces 30 jours elle était attendue
+  streak: number; // jours consécutifs validés depuis la dernière remise (0 si archivée)
   total: number; // validations depuis la création
 };
 
 /**
- * Le détail de CHAQUE habitude : sa semaine, son taux, sa série, son total.
- * Le taux global de la page cache l'habitude qu'on laisse filer — c'est ce
- * tableau qui le dit.
+ * Le détail de CHAQUE habitude, en cours puis archivées : sa semaine, son
+ * taux, sa série, son total. Le taux global de la page cache l'habitude qu'on
+ * laisse filer — c'est ce tableau qui le dit.
  *
- * Le taux est borné à l'ÂGE de l'habitude : une habitude créée avant-hier
- * afficherait sinon 7 % pour deux jours parfaits. `window` dit sur combien de
- * jours il porte réellement, pour que l'écran puisse le nuancer.
+ * Le taux ne porte que sur les jours où l'habitude était ATTENDUE parmi les
+ * 30 derniers : une habitude créée avant-hier afficherait sinon 7 % pour deux
+ * jours parfaits, et une habitude remise après une pause serait punie pour
+ * ses jours d'archive. `window` dit sur combien de jours il porte réellement,
+ * pour que l'écran puisse le nuancer.
  *
- * Une seule requête, dépliée en JS : les volumes sont minuscules (usage perso)
+ * Deux requêtes, dépliées en JS : les volumes sont minuscules (usage perso)
  * et la série, elle, peut remonter bien au-delà de la fenêtre de 30 jours.
  */
 export function getHabitStats(): HabitStat[] {
   const today = todayKey();
-  const rows = db.getAllSync<{ habit_id: number; day: string }>(
-    'SELECT DISTINCT habit_id, day FROM completions',
-  );
-  const byHabit = new Map<number, Set<string>>();
-  for (const r of rows) {
-    const days = byHabit.get(r.habit_id) ?? new Set<string>();
-    days.add(r.day);
-    byHabit.set(r.habit_id, days);
-  }
+  const done = completionsByHabit();
+  const pauses = pausesByHabit();
 
-  return getAllHabits().map((habit) => {
-    const done = byHabit.get(habit.id) ?? new Set<string>();
+  return [...getActiveHabits(), ...getArchivedHabits()].map((habit) => {
+    const days = done.get(habit.id);
 
     // Les sept derniers jours, du plus ancien à aujourd'hui.
-    const week = Array.from({ length: 7 }, (_, i) => done.has(addDays(today, i - 6)));
-
-    // Taux sur 30 jours, jamais plus large que l'âge de l'habitude.
-    const age = daysBetween(habit.created_at, today) + 1;
-    const window = Math.max(1, Math.min(30, age));
-    let hits = 0;
-    for (let i = 0; i < window; i += 1) {
-      if (done.has(addDays(today, -i))) hits += 1;
-    }
-
-    // Série : on part d'aujourd'hui s'il est validé, sinon d'hier — la journée
-    // en cours ne doit pas casser une série tant qu'elle n'est pas finie.
-    let cursor = done.has(today) ? today : addDays(today, -1);
-    let streak = 0;
-    while (done.has(cursor)) {
-      streak += 1;
-      cursor = addDays(cursor, -1);
-    }
+    const week = Array.from({ length: 7 }, (_, i) => days?.has(addDays(today, i - 6)) ?? false);
+    const { hits, expected } = habitScore(habit, days, pauses.get(habit.id), today, 30);
 
     return {
       id: habit.id,
       name: habit.name,
       color: habit.color,
+      archived: habit.archived_since !== null,
       week,
-      rate: hits / window,
-      window,
-      streak,
-      total: done.size,
+      rate: expected > 0 ? hits / expected : null,
+      window: expected,
+      streak: habitStreak(days, pauses.get(habit.id), today),
+      total: days?.size ?? 0,
     };
   });
+}
+
+/** La fiche complète d'UNE habitude (page Stats → on touche une habitude). */
+export type HabitDetail = {
+  habit: Habit;
+  streak: number; // série en cours (0 si archivée, repart à 0 à chaque remise)
+  best: number; // plus longue série de toute son histoire, coupée elle aussi aux remises
+  total: number; // validations depuis la création
+  rate30: number | null; // sur les jours attendus des 30 derniers, null = aucun
+  rateAll: number | null; // depuis la création, jours d'archive exclus
+  expectedAll: number; // jours où elle était attendue depuis sa création
+};
+
+/** Le détail chiffré d'une habitude, archivée ou non (null si elle n'existe pas). */
+export function getHabitDetail(habitId: number): HabitDetail | null {
+  const habit = getHabit(habitId);
+  if (!habit) return null;
+
+  const today = todayKey();
+  const rows = db.getAllSync<{ day: string }>(
+    'SELECT DISTINCT day FROM completions WHERE habit_id = ? ORDER BY day ASC',
+    habitId,
+  );
+  const days = new Set(rows.map((r) => r.day));
+  const pauses = pausesByHabit().get(habitId);
+  const last30 = habitScore(habit, days, pauses, today, 30);
+  const all = habitScore(habit, days, pauses, today, daysBetween(habit.created_at, today) + 1);
+
+  // Plus longue série : on parcourt les jours validés dans l'ordre. Une remise
+  // la coupe comme elle coupe la série en cours, même sans jour manqué entre
+  // deux (archivée puis remise le même jour).
+  const restarts = new Set((pauses ?? []).flatMap((p) => (p.to !== null ? [p.to] : [])));
+  let best = 0;
+  let run = 0;
+  let prev: string | null = null;
+  for (const { day } of rows) {
+    run = prev !== null && addDays(prev, 1) === day && !restarts.has(day) ? run + 1 : 1;
+    best = Math.max(best, run);
+    prev = day;
+  }
+
+  return {
+    habit,
+    streak: habitStreak(days, pauses, today),
+    best,
+    total: days.size,
+    rate30: last30.expected > 0 ? last30.hits / last30.expected : null,
+    rateAll: all.expected > 0 ? all.hits / all.expected : null,
+    expectedAll: all.expected,
+  };
+}
+
+/** L'état d'une habitude un jour donné, pour son calendrier. */
+export type HabitDayState = 'done' | 'missed' | 'paused' | 'none';
+
+/**
+ * L'état de l'habitude pour chacun des jours demandés (une grille de mois) :
+ * validée, manquée, en pause (archivée), ou rien à dire — avant sa création,
+ * aujourd'hui tant qu'elle n'est pas validée, et dans le futur. Une validation
+ * l'emporte sur le reste : validée le matin puis archivée dans la journée,
+ * elle reste validée ce jour-là.
+ */
+export function getHabitDayStates(
+  habitId: number,
+  days: string[],
+): Record<string, HabitDayState> {
+  const states: Record<string, HabitDayState> = {};
+  const habit = getHabit(habitId);
+  if (!habit || days.length === 0) return states;
+
+  const sorted = [...days].sort();
+  const rows = db.getAllSync<{ day: string }>(
+    'SELECT DISTINCT day FROM completions WHERE habit_id = ? AND day BETWEEN ? AND ?',
+    habitId,
+    sorted[0],
+    sorted[sorted.length - 1],
+  );
+  const done = new Set(rows.map((r) => r.day));
+  const pauses = pausesByHabit().get(habitId);
+  const today = todayKey();
+
+  for (const day of days) {
+    if (done.has(day)) states[day] = 'done';
+    else if (day >= today || day < habit.created_at) states[day] = 'none';
+    else states[day] = isExpectedOn(habit, pauses, day) ? 'missed' : 'paused';
+  }
+  return states;
 }
 
 /** Total de secondes méditées, tous jours confondus. */
@@ -1276,8 +1590,8 @@ export function setSetting(key: string, value: string | null): void {
 //  EXPORT / IMPORT (sauvegarde anti-réinstallation)
 // ===========================================================================
 
-/** Version du format d'export (8 = rappels des événements et des abonnements). */
-export const BACKUP_VERSION = 8;
+/** Version du format d'export (9 = habitudes archivées, table habit_pauses). */
+export const BACKUP_VERSION = 9;
 
 type Backup = {
   version: number;
@@ -1291,6 +1605,7 @@ type Backup = {
   event_todos?: unknown[]; // absent des sauvegardes v1/v2
   settings?: unknown[]; // absent des sauvegardes v1/v2/v3
   calendars?: unknown[]; // absent des sauvegardes v1..v4
+  habit_pauses?: unknown[]; // absent des sauvegardes v1..v8
 };
 
 /** Rassemble TOUTES les données brutes dans un objet sérialisable (JSON). */
@@ -1308,6 +1623,7 @@ export function exportData(): Backup {
     event_todos: dump('event_todos'),
     settings: dump('settings'),
     calendars: dump('calendars'),
+    habit_pauses: dump('habit_pauses'),
   };
 }
 
@@ -1332,7 +1648,7 @@ export function importData(backup: Backup): void {
   db.withTransactionSync(() => {
     const tables = [
       'habits', 'completions', 'events', 'meditations',
-      'categories', 'todos', 'event_todos', 'settings', 'calendars',
+      'categories', 'todos', 'event_todos', 'settings', 'calendars', 'habit_pauses',
     ];
     for (const t of tables) db.runSync(`DELETE FROM ${t}`);
 
@@ -1345,6 +1661,7 @@ export function importData(backup: Backup): void {
     restoreTable('event_todos', backup.event_todos ?? []);
     restoreTable('settings', backup.settings ?? []);
     restoreTable('calendars', backup.calendars ?? []);
+    restoreTable('habit_pauses', backup.habit_pauses ?? []);
   });
 
   // Une sauvegarde v1/v2 porte ses liens dans events.todo_id : on les convertit.

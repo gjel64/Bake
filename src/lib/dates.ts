@@ -94,6 +94,12 @@ export function monthWeeks(key: string): string[][] {
   return weeks;
 }
 
+/** Le 1er du mois décalé de n mois depuis celui de `key` (n peut être négatif). */
+export function shiftMonth(key: string, n: number): string {
+  const d = fromDayKey(key);
+  return toDayKey(new Date(d.getFullYear(), d.getMonth() + n, 1));
+}
+
 /** Vrai si la clé appartient au même mois/année que `ref`. */
 export function isSameMonth(key: string, ref: string): boolean {
   return key.slice(0, 7) === ref.slice(0, 7);

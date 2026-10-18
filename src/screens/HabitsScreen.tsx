@@ -3,12 +3,18 @@
  *
  * Affiche les habitudes qu'il reste à valider aujourd'hui. Valider une
  * habitude la fait disparaître (jusqu'à demain) avec une petite animation et
- * un retour haptique. Un bouton « + » permet d'en créer une nouvelle, mais au
- * plus une tous les 30 jours (règle imposée par la base).
+ * un retour haptique. Un bouton « + » permet d'en créer une nouvelle, à deux
+ * conditions (imposées par la base, voir `getAddHabitLock`) : 30 jours depuis
+ * la dernière création, et 100 % — chaque habitude validée les 30 derniers
+ * jours. Tant que ce n'est pas le cas, le bouton affiche les jours qui restent.
+ *
+ * Un appui long sur une carte ouvre la fiche de l'habitude (celle des Stats),
+ * d'où on peut la supprimer — l'archiver, en gardant son historique.
  */
 
 import { useCallback, useState } from 'react';
 import {
+  Alert,
   FlatList,
   LayoutAnimation,
   Platform,
@@ -28,13 +34,18 @@ import { ScreenBackground } from '@/components/ui/ScreenBackground';
 import { LeafBurst } from '@/components/ui/LeafBurst';
 import { HabitCard } from '@/components/HabitCard';
 import { AddHabitModal } from '@/components/AddHabitModal';
+import { HabitDetailModal } from '@/components/HabitDetailModal';
 import {
+  AddHabitLock,
+  HABIT_ADD_COOLDOWN_DAYS,
+  HABIT_UNLOCK_DAYS,
   Habit,
   addHabit,
   completeHabit,
   countCompletedToday,
-  daysUntilCanAddHabit,
-  getAllHabits,
+  getActiveHabits,
+  getAddHabitLock,
+  getArchivedHabits,
   getPendingHabits,
 } from '@/db/database';
 import { syncHabitsReminder } from '@/lib/habitsReminder';
@@ -49,8 +60,15 @@ export function HabitsScreen() {
   const [pending, setPending] = useState<Habit[]>([]);
   const [totalHabits, setTotalHabits] = useState(0);
   const [doneToday, setDoneToday] = useState(0);
-  const [cooldown, setCooldown] = useState(0); // jours restants avant nouvel ajout
+  const [archivedCount, setArchivedCount] = useState(0);
+  const [lock, setLock] = useState<AddHabitLock>({
+    remaining: 0,
+    cooldown: 0,
+    streak: 0,
+    weakest: null,
+  });
   const [modalOpen, setModalOpen] = useState(false);
+  const [detailId, setDetailId] = useState<number | null>(null); // fiche ouverte
   const [burst, setBurst] = useState(0); // déclencheur de l'envolée de feuilles
   const c = useC();
   const styles = makeStyles(c);
@@ -58,9 +76,10 @@ export function HabitsScreen() {
   /** Recharge tout l'état depuis la base. */
   const refresh = useCallback(() => {
     setPending(getPendingHabits());
-    setTotalHabits(getAllHabits().length);
+    setTotalHabits(getActiveHabits().length);
+    setArchivedCount(getArchivedHabits().length);
     setDoneToday(countCompletedToday());
-    setCooldown(daysUntilCanAddHabit());
+    setLock(getAddHabitLock());
   }, []);
 
   // Rechargé à chaque fois que l'onglet redevient visible (ex : retour depuis
@@ -88,7 +107,24 @@ export function HabitsScreen() {
     refresh();
   }
 
-  const canAdd = cooldown === 0;
+  /** Bouton « + » verrouillé : on rappelle les deux règles, et ce qui reste à tenir. */
+  function explainLock() {
+    const days = (n: number) => `${n} jour${n > 1 ? 's' : ''}`;
+    const pending: string[] = [];
+    if (lock.cooldown > 0) {
+      pending.push(`• Attente : encore ${days(lock.cooldown)} depuis ton dernier ajout.`);
+    }
+    if (lock.streak > 0) {
+      const weakest = lock.weakest ? ` (« ${lock.weakest} » est la plus en retard)` : '';
+      pending.push(`• 100 % : encore ${days(lock.streak)} sans faute${weakest}.`);
+    }
+    Alert.alert(
+      'Pas encore',
+      `Pour ajouter une habitude, il faut ${HABIT_ADD_COOLDOWN_DAYS} jours depuis le dernier ajout, et chacune de tes habitudes validée ${HABIT_UNLOCK_DAYS} jours de suite.\n\n${pending.join('\n')}`,
+    );
+  }
+
+  const canAdd = lock.remaining === 0;
   const subtitle =
     totalHabits === 0
       ? 'Commence par créer une habitude'
@@ -102,14 +138,18 @@ export function HabitsScreen() {
       <FlatList
         data={pending}
         keyExtractor={(h) => String(h.id)}
-        renderItem={({ item }) => <HabitCard habit={item} onComplete={onComplete} />}
+        renderItem={({ item }) => (
+          <HabitCard habit={item} onComplete={onComplete} onLongPress={(h) => setDetailId(h.id)} />
+        )}
         contentContainerStyle={styles.list}
-        ListEmptyComponent={<EmptyState hasHabits={totalHabits > 0} />}
+        ListEmptyComponent={
+          <EmptyState hasHabits={totalHabits > 0} hasArchived={archivedCount > 0} />
+        }
       />
 
-      {/* Bouton flottant d'ajout (verrouillé pendant le cooldown) */}
+      {/* Bouton flottant d'ajout (verrouillé tant que tout n'est pas à 100 %) */}
       <Pressable
-        onPress={() => (canAdd ? setModalOpen(true) : undefined)}
+        onPress={() => (canAdd ? setModalOpen(true) : explainLock())}
         style={({ pressed }) => [
           styles.fab,
           !canAdd && styles.fabLocked,
@@ -121,7 +161,7 @@ export function HabitsScreen() {
         ) : (
           <View style={styles.fabLockedInner}>
             <Ionicons name="lock-closed" size={16} color={c.white} />
-            <Text style={styles.fabLockedText}>{cooldown} j</Text>
+            <Text style={styles.fabLockedText}>{lock.remaining} j</Text>
           </View>
         )}
       </Pressable>
@@ -132,6 +172,12 @@ export function HabitsScreen() {
           onAdd={onAdd}
         />
 
+        <HabitDetailModal
+          habitId={detailId}
+          onClose={() => setDetailId(null)}
+          onChanged={refresh}
+        />
+
         {/* Envolée de feuilles à la validation (par-dessus la liste) */}
         <LeafBurst trigger={burst} originY={320} />
       </SafeAreaView>
@@ -139,8 +185,11 @@ export function HabitsScreen() {
   );
 }
 
-/** État « vide » : soit tout est validé, soit aucune habitude n'existe. */
-function EmptyState({ hasHabits }: { hasHabits: boolean }) {
+/**
+ * État « vide » : soit tout est validé, soit aucune habitude n'est en cours —
+ * auquel cas on rappelle que les archivées attendent dans les Stats.
+ */
+function EmptyState({ hasHabits, hasArchived }: { hasHabits: boolean; hasArchived: boolean }) {
   const c = useC();
   const styles = makeStyles(c);
   return (
@@ -158,6 +207,11 @@ function EmptyState({ hasHabits }: { hasHabits: boolean }) {
           ? 'habitude complétées, la classe!'
           : 'Appuie sur + pour créer ta première habitude.'}
       </Text>
+      {!hasHabits && hasArchived && (
+        <Text style={styles.emptyText}>
+          Tes habitudes archivées se remettent depuis les Stats.
+        </Text>
+      )}
     </View>
   );
 }

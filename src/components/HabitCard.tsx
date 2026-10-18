@@ -1,7 +1,8 @@
 /**
  * HabitCard — une carte d'habitude à valider (style iOS, thémé clair/sombre).
  * Liseré coloré + nom + description à gauche, rond « valider » à droite.
- * Apparition douce au montage. Ne connaît pas la base : remonte `onComplete`.
+ * Apparition douce au montage. Ne connaît pas la base : remonte `onComplete`,
+ * et `onLongPress` sur un appui long (l'écran ouvre alors la fiche de l'habitude).
  */
 
 import { useEffect, useRef } from 'react';
@@ -13,9 +14,10 @@ import { font, radius, softShadow, spacing, useC } from '@/theme';
 type Props = {
   habit: Habit;
   onComplete: (habit: Habit) => void;
+  onLongPress?: (habit: Habit) => void;
 };
 
-export function HabitCard({ habit, onComplete }: Props) {
+export function HabitCard({ habit, onComplete, onLongPress }: Props) {
   const c = useC();
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -43,14 +45,17 @@ export function HabitCard({ habit, onComplete }: Props) {
     >
       <View style={[styles.stripe, { backgroundColor: habit.color }]} />
 
-      <View style={styles.body}>
+      <Pressable
+        style={styles.body}
+        onLongPress={onLongPress ? () => onLongPress(habit) : undefined}
+      >
         <Text style={[styles.name, { color: c.text }]}>{habit.name}</Text>
         {habit.description ? (
           <Text style={[styles.desc, { color: c.textMuted }]} numberOfLines={2}>
             {habit.description}
           </Text>
         ) : null}
-      </View>
+      </Pressable>
 
       <Pressable
         onPress={() => onComplete(habit)}
