@@ -100,8 +100,8 @@ export async function scheduleReminder(
  * ou null si ça n'a pas pu se faire.
  *
  * Le texte est figé une fois pour toutes : une notification répétitive ne peut
- * pas être personnalisée au moment où elle sonne (« il te reste 3 habitudes »
- * serait donc impossible).
+ * pas être personnalisée au moment où elle sonne. Pour qu'il suive ce qui reste
+ * à valider, `lib/habitsReminder.ts` la reprogramme à chaque validation.
  */
 export async function scheduleDailyReminder(
   hour: number,

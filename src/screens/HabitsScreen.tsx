@@ -95,6 +95,8 @@ export function HabitsScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     completeHabit(habit.id);
+    // Le rappel du jour ne cite que ce qui reste à valider : on le réécrit.
+    void syncHabitsReminder();
     setBurst((b) => b + 1); // envolée de feuilles
     refresh();
   }

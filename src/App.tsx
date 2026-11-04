@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { StyleSheet } from 'react-native';
+import { AppState, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -61,6 +61,16 @@ export default function App(): React.JSX.Element {
     // habitudes en place (réinstallation, restauration de sauvegarde…), et on
     // fait avancer la fenêtre des rappels d'événements.
     initNotifications().then(syncHabitsReminder).then(syncEventReminders);
+  }, []);
+
+  useEffect(() => {
+    // À chaque retour au premier plan, le rappel des habitudes repart de la
+    // liste du jour : la veille, il a pu être réduit, voire supprimé une fois
+    // tout validé.
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void syncHabitsReminder();
+    });
+    return () => sub.remove();
   }, []);
 
   return (
