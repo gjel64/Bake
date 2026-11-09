@@ -31,8 +31,12 @@ export const REMINDER_PRESETS: readonly number[] = [0, 5, 15, 30, 60, 120, 1440]
 /** Horizon de programmation, en jours. */
 const WINDOW_DAYS = 14;
 
-/** Plafond de rappels programmés d'un coup (iOS : 64 en attente, habitudes comprises). */
-const MAX_SCHEDULED = 60;
+/**
+ * Plafond de rappels programmés d'un coup. iOS n'en garde que 64 en attente au
+ * total : il faut laisser la place aux 7 rappels des habitudes
+ * (`lib/habitsReminder.ts`) et aux rappels de to-dos.
+ */
+const MAX_SCHEDULED = 50;
 
 /** Une durée lisible : 5 → "5 min", 60 → "1 h", 90 → "1 h 30", 1440 → "1 jour". */
 function labelDelay(minutes: number): string {

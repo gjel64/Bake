@@ -2,9 +2,9 @@
  * notifications.ts — les rappels locaux, via expo-notifications.
  *
  * Trois usages : le rappel ponctuel d'un to-do (`scheduleReminder`), le rappel
- * QUOTIDIEN des habitudes (`scheduleDailyReminder`), qui se répète tout seul
- * chaque jour à heure fixe, et les rappels AVANT un événement de l'agenda
- * (`scheduleEventReminder`, orchestrés par `lib/eventReminders.ts`).
+ * quotidien des habitudes (`scheduleHabitsReminder`, une notif datée par jour,
+ * orchestrées par `lib/habitsReminder.ts`), et les rappels AVANT un événement
+ * de l'agenda (`scheduleEventReminder`, orchestrés par `lib/eventReminders.ts`).
  *
  * Ce sont des notifications LOCALES programmées (aucun serveur). Elles ne
  * fonctionnent pas dans Expo Go : il faut un build de dev/preview (ce que tu
@@ -19,7 +19,11 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
-/** Marqueur glissé dans les rappels quotidiens, pour les retrouver plus tard. */
+/**
+ * Marqueur glissé dans les rappels des habitudes, pour les retrouver plus tard.
+ * Ne pas le renommer : c'est aussi lui qui permet d'effacer l'ancienne notif
+ * répétitive (versions ≤ 5.4) restée programmée sur les téléphones.
+ */
 const DAILY_KIND = 'habits-daily';
 
 /** Marqueur des rappels d'événements (tous effacés puis reprogrammés d'un bloc). */
@@ -95,27 +99,26 @@ export async function scheduleReminder(
 }
 
 /**
- * Programme un rappel QUOTIDIEN à `hour:minute` (heure locale), qui se répète
- * indéfiniment. Renvoie l'identifiant de la notif (à stocker pour l'annuler),
- * ou null si ça n'a pas pu se faire.
- *
- * Le texte est figé une fois pour toutes : une notification répétitive ne peut
- * pas être personnalisée au moment où elle sonne. Pour qu'il suive ce qui reste
- * à valider, `lib/habitsReminder.ts` la reprogramme à chaque validation.
+ * Programme UN rappel des habitudes, à la date donnée (une seule fois, pas de
+ * répétition). `lib/habitsReminder.ts` en programme un par jour, chacun avec
+ * son propre texte. Aucun identifiant à garder : le marqueur `DAILY_KIND`
+ * suffit à tous les retrouver (`cancelDailyReminders`).
+ * Renvoie false si ça n'a pas pu se faire.
  */
-export async function scheduleDailyReminder(
-  hour: number,
-  minute: number,
+export async function scheduleHabitsReminder(
+  date: Date,
   title: string,
   body: string,
-): Promise<string | null> {
+): Promise<boolean> {
+  if (date.getTime() <= Date.now()) return false;
   try {
-    return await Notifications.scheduleNotificationAsync({
+    await Notifications.scheduleNotificationAsync({
       content: { title, body, data: { kind: DAILY_KIND } },
-      trigger: { hour, minute, repeats: true, channelId: 'habitudes' },
+      trigger: { date, channelId: 'habitudes' },
     });
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -167,11 +170,10 @@ async function cancelKind(kind: string): Promise<void> {
 }
 
 /**
- * Annule TOUS les rappels quotidiens déjà programmés, y compris ceux dont on a
- * perdu l'identifiant — c'est le cas après l'import d'une sauvegarde, qui
- * ramène un id périmé. Sans ce ménage, l'ancienne notification continuerait de
- * sonner chaque jour sans qu'on puisse la retrouver. Les rappels de to-dos, eux,
- * ne portent pas le marqueur et ne sont pas touchés.
+ * Annule TOUS les rappels des habitudes déjà programmés (avant de les
+ * reprogrammer), y compris l'ancienne notification répétitive des versions
+ * ≤ 5.4, qui porte le même marqueur. Les rappels de to-dos, eux, ne portent
+ * pas le marqueur et ne sont pas touchés.
  */
 export async function cancelDailyReminders(): Promise<void> {
   await cancelKind(DAILY_KIND);

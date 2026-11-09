@@ -1,0 +1,26 @@
+// bake-habits — module natif local (autolinké depuis `modules/`), voir src/lib/habitsReminder.ts.
+apply plugin: 'com.android.library'
+
+group = 'expo.modules.bakehabits'
+version = '1.0.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+useExpoPublishing()
+
+android {
+  namespace "expo.modules.bakehabits"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}
+
+dependencies {
+  // NotificationCompat (setSilent) et AlarmManagerCompat. Même version plancher
+  // qu'expo-notifications : Gradle retient de toute façon la plus récente.
+  implementation 'androidx.core:core:1.6.0'
+}

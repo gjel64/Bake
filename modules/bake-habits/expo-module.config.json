@@ -1,0 +1,7 @@
+{
+  "name": "bake-habits",
+  "platforms": ["android"],
+  "android": {
+    "modules": ["expo.modules.bakehabits.BakeHabitsModule"]
+  }
+}
